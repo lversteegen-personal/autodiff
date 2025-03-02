@@ -11,6 +11,7 @@
 #include "array.hpp"
 #include "difftape.hpp"
 #include "random.hpp"
+#include "data_loader.hpp"
 
 template <typename T>
 std::ostream &operator<<(std::ostream &s, const std::vector<T> &v)
@@ -24,26 +25,24 @@ std::ostream &operator<<(std::ostream &s, const std::vector<T> &v)
 int main()
 {
     RandomArrayGenerator randomArrayGenerator(0);
+    auto mnist = Loader::loadMNIST(10);
+    Array<double> images(mnist.data.reshape({-1, 28, 28}));
+    Array<int> labels(mnist.label.reshape({-1}));
+    std::cout << images[0] << std::endl;
 
-    auto x = randomArrayGenerator.uniformInteger<double>({3,3}, -1, 2);
-    auto y = randomArrayGenerator.uniformInteger<double>({1,3}, -1, 2);
-    auto a = x+x.transpose(0,1);
-    //auto b = x*y;
-    std::cout << x << std::endl;
-    std::cout << a << std::endl;
-    //std::cout << b << std::endl;
+    /*auto diffTape = DiffTape<double>(true);
+    auto& x = *(new Coefficients<double>(diffTape, randomArrayGenerator.uniformInteger<double>({1,3,3}, 0, 3)));
+    auto& y = *(new Coefficients<double>(diffTape,  Array<double>::range(900).reshape({100,3,3})));
 
-    /*auto diffTape = DiffTape<long>(true);
-    auto& x = *(new Coefficients<long>(diffTape, randomArrayGenerator.uniformInteger<long>({3,3}, -1, 2)));
-    auto& y = *(new Coefficients<long>(diffTape,  randomArrayGenerator.uniformInteger<long>({3,3}, -1, 2)));
-
-    auto& z = reduceSum(x*(x+y));
+    auto& u = matmul(x,y);
+    auto& z = reduceSum(u);
 
     auto a = diffTape.getGradient(x, z);
     auto b = diffTape.getGradient(y, z);
 
     std::cout << x << std::endl;
     std::cout << y << std::endl;
+    std::cout << u << std::endl;
     std::cout << z << std::endl;
     std::cout << a << std::endl;
     std::cout << b << std::endl;*/

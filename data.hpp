@@ -9,7 +9,7 @@ class Array;
 template <typename T>
 class Data
 {
-    friend class Array<T>;
+    template <typename U> friend class Array;
 private:
     class Control
     {

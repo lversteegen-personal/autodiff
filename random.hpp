@@ -47,7 +47,7 @@ public:
     /// @param low The inclusive lower bound of the distribution.
     /// @param high The exclusive upper bound of the distribution.
     /// @return The random array.
-    Array<T> uniformInteger(const Coordinates &shape, long low = 0, long high = 2)
+    Array<T> uniformInteger(const Coordinates &shape, long low, long high)
     {
         if (low >= high)
         {
@@ -55,7 +55,7 @@ public:
             low = 0;
         }
 
-        std::uniform_int_distribution<long> distribution(low, high);
+        std::uniform_int_distribution<long> distribution(low, high-1);
         auto data = Data<T>(Array<T>::calculateFlatLength(shape));
         for (size_t i = 0; i < data.size(); i++)
             data[i] = distribution(mRandomEngine);
@@ -68,7 +68,7 @@ public:
     /// @param shape The shape of the resulting array.
     /// @param high The exclusive upper bound of the distribution.
     /// @return The random array.
-    Array<T> uniformInteger(const Coordinates &shape, long high = 0)
+    Array<T> uniformInteger(const Coordinates &shape, long high =2)
     {
         return uniformInteger<T>(shape, 0, high);
     }
@@ -95,5 +95,7 @@ public:
         return Array<long>(data, shape);
     }
 };
+
+std::random_device RandomArrayGenerator::randomDevice;
 
 #endif

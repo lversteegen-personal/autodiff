@@ -28,6 +28,9 @@ typedef StackBuffer<long, MAX_DIM> Coordinates;
 template <typename T>
 class Array
 {
+    template <typename U>
+    friend class Array;
+
     static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
 
 public:
@@ -61,7 +64,7 @@ public:
     int getDim() const { return mDim; }
 
 public:
-    Coordinates getShape() const { return mShape; }
+    const Coordinates &refShape() const { return mShape; }
 
     ~Array() = default;
 
@@ -80,6 +83,11 @@ private:
     }
 
 public:
+    Array<T>(T single) : mData(Data<T>(1)), mFlatLength(1), mShape(0), mStrides(0), mDim(0)
+    {
+        mData[0] = single;
+    }
+
     Array<T>(const Data<T> &data, const Coordinates &shape) : mData(data), mFlatLength(mData.size()), mShape(shape), mDim(shape.size()), mStrides(shape.size())
     {
         calculateStrides();
@@ -117,7 +125,7 @@ public:
         return result;
     }
 
-    Array<T> const reshape(const Coordinates &shape)
+    Array<T> reshape(const Coordinates &shape) const
     {
         if (transposed)
             throw std::logic_error("Cannot reshape a transposed array.");
@@ -171,8 +179,13 @@ public:
 
         for (size_t i = 0; i < dim; i++)
         {
-            strides[dim - i - 1] = multiplier;
-            multiplier *= shape[dim - i - 1];
+            if (shape[dim - i - 1] == 1)
+                strides[dim - i - 1] = 0;
+            else
+            {
+                strides[dim - i - 1] = multiplier;
+                multiplier *= shape[dim - i - 1];
+            }
         }
 
         return strides;
@@ -190,6 +203,79 @@ private:
     }
 
 public:
+
+    static Array<T> fromFlatLines(const std::vector<Data<T>> &lines)
+    {
+        if (lines.size() == 0)
+            return Array<T>(Data<T>(0), Coordinates(0));
+
+        auto length = lines[0].size();
+
+        for (long l = 0; l < lines.size(); l++)
+        {
+            if (lines[l].size() != length)
+                throw std::invalid_argument("All lines must have the same size.");
+        }
+
+        auto result = Array<T>(Data<T>(lines.size() * length), Coordinates({lines.size(), length}));
+
+        T *pResultData = result.mData.mRaw;
+        for (long l = 0; l < lines.size(); l++)
+        {
+            std::copy(lines[l].mRaw, lines[l].mRaw + length, pResultData);
+            pResultData += length;
+        }
+
+        return result;
+    }
+
+    static Array<T> fromLines(const std::vector<Array<T>> &lines)
+    {
+        if (lines.size() == 0)
+            return Array<T>(Data<T>(0), Coordinates(0));
+
+        auto shape = lines[0].mShape;
+        for (long l = 0; l < lines.size(); l++)
+        {
+            if (lines[l].mShape != shape)
+                throw std::invalid_argument("All lines must have the same shape.");
+        }
+
+        auto flatLineLength = lines[0].mFlatLength;
+
+        auto result = Array<T>(Data<T>(lines.size() * flatLineLength), Coordinates(lines.size(), shape));
+        Coordinates c(shape.size(), 0);
+
+        T *pResultData = result.mData.mRaw;
+
+        for (long l = 0; l < lines.size(); l++)
+        {
+            T *pLineData = lines[l].mData.mRaw;
+            c = 0;
+            for (long k = 0; k < flatLineLength; k++)
+            {
+                *pResultData = *pLineData;
+
+                for (long i = shape.size() - 1; i >= 0; i--)
+                {
+                    c[i]++;
+
+                    if (shape[i] == 1 || c[i] % shape[i] == 0)
+                        pLineData -= lines[l].mStrides[i] * (shape[i] - 1);
+                    else
+                        pLineData += lines[l].mStrides[i];
+
+                    if (c[i] % shape[i] != 0)
+                        break;
+                }
+
+                pResultData++;
+            }
+        }
+
+        return result;
+    }
+
     static Array<T> range(T from, T to, T step)
     {
         if (step == 0)
@@ -270,12 +356,12 @@ public:
 private:
     static inline T copy(T s) { return s; }
 
-    template <T (*f)(T)>
-    static Array<T> &destUnary(const Array<T> &dest, const Array<T> &source)
+    template <typename U, T (*f)(T)>
+    static Array<U> &destUnary(Array<U> &dest, const Array<T> &source)
     {
         assertm(isSubshape(source.mShape, dest.mShape), "Source array is not a subshape of the destination array.");
 
-        T *pDestData = dest.mData.mRaw;
+        U *pDestData = dest.mData.mRaw;
         T *pSourceData = source.mData.mRaw;
 
         Coordinates c(dest.mDim, 0);
@@ -310,38 +396,59 @@ private:
     static inline T multiply(T a, T b) { return a * b; }
     static inline T subtract(T a, T b) { return a - b; }
     static inline T divide(T a, T b) { return a / b; }
+    static inline T modulo(T a, T b) { return a % b; }
+    static inline T logical_and(T a, T b) { return a && b; }
+    static inline T logical_or(T a, T b) { return a || b; }
 
-    template <T (*f)(T, T)>
-    static Array<T> &binaryDestCombine(Array<T> &dest, const Array<T> &left, const Array<T> &right)
+    static inline bool equal(T a, T b) { return a == b; }
+    static inline bool notEqual(T a, T b) { return a != b; }
+    static inline bool less(T a, T b) { return a < b; }
+    static inline bool lessEqual(T a, T b) { return a <= b; }
+    static inline bool greater(T a, T b) { return a > b; }
+    static inline bool greaterEqual(T a, T b) { return a >= b; }
+
+    template <typename U, U (*f)(T, T)>
+    static Array<U> &binaryDestCombine(Array<U> &dest, const Array<T> &left, const Array<T> &right)
     {
         assertm(isSubshape(left.mShape, dest.mShape), "Left array is not a subshape of the destination array.");
         assertm(isSubshape(right.mShape, dest.mShape), "Right array is not a subshape of the destination array.");
 
-        T *pDestData = dest.mData.mRaw;
+        U *pDestData = dest.mData.mRaw;
         T *pLeftData = left.mData.mRaw;
         T *pRightData = right.mData.mRaw;
+
+        long maxDim = std::max({dest.mDim, left.mDim, right.mDim});
+        long minDimDest = maxDim - dest.mDim;
+        long minDimLeft = maxDim - left.mDim;
+        long minDimRight = maxDim - right.mDim;
 
         Coordinates c(dest.mDim, 0);
 
         while (c[0] < dest.mShape[0])
         {
-            *pDestData = f(*pRightData, *pLeftData);
+            *pDestData = f(*pLeftData, *pRightData);
 
             for (long i = dest.mDim - 1; i >= 0; i--)
             {
                 c[i]++;
 
-                if (dest.mShape[i] == 1 || c[i] % dest.mShape[i] == 0)
+                if (i < minDimDest)
+                    ;
+                else if (dest.mShape[i] == 1 || c[i] % dest.mShape[i] == 0)
                     pDestData -= dest.mStrides[i] * (dest.mShape[i] - 1);
                 else
                     pDestData += dest.mStrides[i];
 
-                if (left.mShape[i] == 1 || c[i] % left.mShape[i] == 0)
+                if (i < minDimLeft)
+                    ;
+                else if (left.mShape[i] == 1 || c[i] % left.mShape[i] == 0)
                     pLeftData -= left.mStrides[i] * (left.mShape[i] - 1);
                 else
                     pLeftData += left.mStrides[i];
 
-                if (right.mShape[i] == 1 || c[i] % right.mShape[i] == 0)
+                if (i < minDimRight)
+                    ;
+                else if (right.mShape[i] == 1 || c[i] % right.mShape[i] == 0)
                     pRightData -= right.mStrides[i] * (right.mShape[i] - 1);
                 else
                     pRightData += right.mStrides[i];
@@ -384,13 +491,13 @@ public:
         if ((broadcastType & BroadcastType::LEFT) == 0)
             throw std::invalid_argument("Other array is not a subshape of this array.");
 
-        binaryDestCombine<f>(*this, *this, other);
+        binaryDestCombine<T, f>(*this, *this, other);
 
         return *this;
     }
 
-    template <T (*f)(T, T)>
-    static Array<T> binaryCombine(const Array<T> &left, const Array<T> &right)
+    template <typename U, U (*f)(T, T)>
+    static Array<U> binaryCombine(const Array<T> &left, const Array<T> &right)
     {
         BroadcastType broadcastType = broadcastRelationship(left.mShape, right.mShape);
 
@@ -398,25 +505,26 @@ public:
             throw std::invalid_argument("Shapes cannot be broadcasted to match.");
 
         auto resultShape = broadcastShape(left.mShape, right.mShape);
-        auto result = Array<T>(Data<T>(calculateFlatLength(resultShape)), resultShape);
+        auto result = Array<U>(Data<U>(calculateFlatLength(resultShape)), resultShape);
 
-        return binaryDestCombine<f>(result, left, right);
+        return binaryDestCombine<U, f>(result, left, right);
     }
 
     static Coordinates broadcastShape(const Coordinates &shape1, const Coordinates &shape2)
     {
-        int dim1 = shape1.size(), dim2 = shape2.size();
-        int dim = std::max(dim1, dim2);
+        long dim1 = shape1.size(), dim2 = shape2.size();
+        long dim = std::max(dim1, dim2);
+        long offset1 = dim - dim1, offset2 = dim - dim2;
         Coordinates result(dim);
 
-        for (size_t i = 0; i < dim; i++)
+        for (long i = 0; i < dim; i++)
         {
-            if (i >= dim1)
+            if (i < offset1)
                 result[i] = shape2[i];
-            else if (i >= dim2)
+            else if (i < offset2)
                 result[i] = shape1[i];
             else
-                result[i] = std::max(shape1[i], shape2[i]);
+                result[i] = std::max(shape1[i + offset1], shape2[i + offset2]);
         }
 
         return result;
@@ -429,22 +537,23 @@ public:
     /// @return The broadcast type, see commentary of BroadcastType for explanation of flags.
     static BroadcastType broadcastRelationship(const Coordinates &shape1, const Coordinates &shape2)
     {
-        int dim1 = shape1.size(), dim2 = shape2.size();
-        int minDim = std::min(dim1, dim2);
+        long dim1 = shape1.size(), dim2 = shape2.size();
+        long minDim = std::min(dim1, dim2);
+        long offset1 = dim1 - minDim, offset2 = dim2 - minDim;
         BroadcastType result = BroadcastType::MATCH;
 
-        if (dim1 > dim2)
+        if (offset1 > 0)
             result &= BroadcastType::LEFTMIX;
-        if (dim1 < dim2)
+        if (offset2 > 0)
             result &= BroadcastType::RIGHTMIX;
 
-        for (size_t i = 0; i < minDim; i++)
+        for (long i = minDim - 1; i >= 0; i--)
         {
-            if (shape1[i] != shape2[i])
+            if (shape1[i + offset1] != shape2[i + offset2])
             {
-                if (shape1[i] == 1)
+                if (shape1[i + offset1] == 1)
                     result &= BroadcastType::RIGHTMIX;
-                else if (shape2[i] == 1)
+                else if (shape2[i + offset2] == 1)
                     result &= BroadcastType::LEFTMIX;
                 else
                     return BroadcastType::NONE;
@@ -464,6 +573,46 @@ public:
         return (broadcastRelationship(shape1, shape2) & BroadcastType::MATCH) != 0;
     }
 
+    Array<bool> operator==(const Array<T> &other) const
+    {
+        return binaryCombine<bool, equal>(*this, other);
+    }
+
+    Array<bool> operator!=(const Array<T> &other) const
+    {
+        return binaryCombine<bool, notEqual>(*this, other);
+    }
+
+    Array<bool> operator<(const Array<T> &other) const
+    {
+        return binaryCombine<bool, less>(*this, other);
+    }
+
+    Array<bool> operator<=(const Array<T> &other) const
+    {
+        return binaryCombine<bool, lessEqual>(*this, other);
+    }
+
+    Array<bool> operator>(const Array<T> &other) const
+    {
+        return binaryCombine<bool, greater>(*this, other);
+    }
+
+    Array<bool> operator>=(const Array<T> &other) const
+    {
+        return binaryCombine<bool, greaterEqual>(*this, other);
+    }
+
+    Array<T> operator&&(const Array<T> &other) const
+    {
+        return binaryCombine<T, logical_and>(*this, other);
+    }
+
+    Array<T> operator||(const Array<T> &other) const
+    {
+        return binaryCombine<T, logical_or>(*this, other);
+    }
+
     Array<T> &operator+=(const Array<T> &other)
     {
         return binaryApply<add>(other);
@@ -471,7 +620,7 @@ public:
 
     Array<T> operator+(const Array<T> &other) const
     {
-        return binaryCombine<add>(*this, other);
+        return binaryCombine<T, add>(*this, other);
     }
 
     Array<T> &operator+=(const T other)
@@ -497,7 +646,7 @@ public:
 
     Array<T> operator*(const Array<T> &other) const
     {
-        return binaryCombine<multiply>(*this, other);
+        return binaryCombine<T, multiply>(*this, other);
     }
 
     Array<T> &operator*=(const T other)
@@ -523,7 +672,7 @@ public:
 
     Array<T> operator-(const Array<T> &other) const
     {
-        return binaryCombine<subtract>(other);
+        return binaryCombine<T, subtract>(other);
     }
 
     Array<T> &operator-=(const T other)
@@ -549,7 +698,7 @@ public:
 
     Array<T> operator/(const Array<T> &other) const
     {
-        return binaryCombine<divide>(other);
+        return binaryCombine<T, divide>(other);
     }
 
     Array<T> &operator/=(const T other)
@@ -568,55 +717,45 @@ public:
         return result;
     }
 
-    static Coordinates matmulShape(const Array<T> &left, const Array<T> &right, long leftProductAxis = -1, long rightProductAxis = -2)
+    Array<T> operator%(const Array<T> &other) const
     {
-        if (left.mDim != right.mDim)
+        static_assert(std::is_integral_v<T>, "Modulo operator is only defined for integral types.");
+        return binaryCombine<T, modulo>(*this, other);
+    }
+
+    static Coordinates matmulShape(const Coordinates &leftShape, const Coordinates &rightShape, long leftProductAxis = -1, long rightProductAxis = -2)
+    {
+        if (leftShape.size() != rightShape.size())
             throw std::invalid_argument("Arrays do not have the same number of dimensions");
         if (leftProductAxis == rightProductAxis)
             throw std::invalid_argument("leftProductAxis must be different from rightProductAxis");
-        int dim = left.mDim;
+        long dim = leftShape.size();
 
         rightProductAxis = rightProductAxis % dim;
         leftProductAxis = leftProductAxis % dim;
         rightProductAxis = rightProductAxis < 0 ? dim + rightProductAxis : rightProductAxis;
         leftProductAxis = leftProductAxis < 0 ? dim + leftProductAxis : leftProductAxis;
 
-        if (left.mShape[leftProductAxis] != right.mShape[rightProductAxis])
+        if (leftShape[leftProductAxis] != rightShape[rightProductAxis])
             throw std::invalid_argument("Arrays do not have the same length in product dimension.");
 
-        Coordinates leftOuterShape(dim - 2);
-        Coordinates rightOuterShape(dim - 2);
-        size_t j = 0;
-        for (size_t i = 0; i < dim; i++)
-        {
-            if (i != rightProductAxis && i != leftProductAxis)
-            {
-                leftOuterShape[j] = left.mShape[i];
-                rightOuterShape[j] = right.mShape[i];
-                j++;
-            }
-        }
-
-        BroadcastType broadcastType = broadcastRelationship(leftOuterShape, rightOuterShape);
-        if (broadcastType == BroadcastType::NONE)
-            throw std::invalid_argument("Arrays do not have compatible shapes for matrix multiplication.");
-
-        auto outerBroadcastShape = broadcastShape(leftOuterShape, rightOuterShape);
         Coordinates resultShape(dim);
 
-        j = 0;
         for (size_t i = 0; i < dim; i++)
         {
             if (i == rightProductAxis)
-                resultShape[i] = left.mShape[i];
+                resultShape[i] = leftShape[i];
             else if (i == leftProductAxis)
-                resultShape[i] = right.mShape[i];
+                resultShape[i] = rightShape[i];
+            else if (leftShape[i] == rightShape[i] || leftShape[i] == 1)
+                resultShape[i] = rightShape[i];
+            else if (rightShape[i] == 1)
+                resultShape[i] = leftShape[i];
             else
-            {
-                resultShape[i] = outerBroadcastShape[j];
-                j++;
-            }
+                throw std::invalid_argument("Arrays do not have compatible shapes for matrix multiplication.");
         }
+
+        return resultShape;
     }
 
     static Array<T> matmul(const Array<T> &left, const Array<T> &right, long leftProductAxis = -1, long rightProductAxis = -2)
@@ -675,35 +814,35 @@ public:
         auto resultStrides = calculateStrides(resultShape);
 
         auto resultData = Data<T>(resultFlatLength);
-        size_t leftOffset = 0, rightOffset = 0;
+        T *pLeftData = left.mData.mRaw, *pRightData = right.mData.mRaw, *pResultData = resultData.mRaw;
         size_t productAxisLength = left.mShape[leftProductAxis];
         size_t leftProductStride = left.mStrides[leftProductAxis], rightProductStride = right.mStrides[rightProductAxis];
-        Coordinates outerProgress(dim, 0);
+        Coordinates c(dim, 0);
 
         for (size_t k = 0; k < resultFlatLength; k++)
         {
-            resultData[k] = innerProduct(left.mData, right.mData, leftOffset, leftProductStride, rightOffset, rightProductStride, productAxisLength);
+            resultData[k] = innerProduct(pLeftData, pRightData, leftProductStride, rightProductStride, productAxisLength);
 
             for (long i = dim - 1; i >= 0; i--)
             {
-                outerProgress[i]++;
+                c[i]++;
 
                 if (i != rightProductAxis)
                 {
-                    if (right.mShape[i] == 1 || outerProgress[i] % right.mShape[i] == 0)
-                        rightOffset -= right.mStrides[i] * (right.mShape[i] - 1);
+                    if (right.mShape[i] == 1 || c[i] % right.mShape[i] == 0)
+                        pRightData -= right.mStrides[i] * (right.mShape[i] - 1);
                     else
-                        rightOffset += right.mStrides[i];
+                        pRightData += right.mStrides[i];
                 }
                 if (i != leftProductAxis)
                 {
-                    if (left.mShape[i] == 1 || outerProgress[i] % left.mShape[i] == 0)
-                        leftOffset -= left.mStrides[i] * (left.mShape[i] - 1);
+                    if (left.mShape[i] == 1 || c[i] % left.mShape[i] == 0)
+                        pLeftData -= left.mStrides[i] * (left.mShape[i] - 1);
                     else
-                        leftOffset += left.mStrides[i];
+                        pLeftData += left.mStrides[i];
                 }
 
-                if (outerProgress[i] % resultShape[i] != 0)
+                if (c[i] % resultShape[i] != 0)
                     break;
             }
         }
@@ -712,93 +851,65 @@ public:
     }
 
 private:
-    inline static T innerProduct(const Data<T> &leftData, const Data<T> &rightData, size_t leftOffset, size_t leftStride, size_t rightOffset, size_t rightStride, size_t length)
+    inline static T innerProduct(T *pLeftData, T *pRightData, size_t leftStride, size_t rightStride, size_t length)
     {
         T sum = 0;
-        size_t li = leftOffset, ri = rightOffset;
+
         for (size_t k = 0; k < length; k++)
         {
-            sum += leftData[li] * rightData[ri];
-            li += leftStride;
-            ri += rightStride;
+            sum += *pLeftData * *pRightData;
+            pLeftData += leftStride;
+            pRightData += rightStride;
         }
+
+        pLeftData -= leftStride * length;
+        pRightData -= rightStride * length;
 
         return sum;
     }
 
-    static void simpleMatmul(Data<T> leftData, Data<T> rightData, Data<T> destData, size_t leftOffset, size_t leftRowStride, size_t leftColumnStride, size_t rightOffset, size_t rightRowStride, size_t rightColumnStride, size_t destOffset, size_t destRowStride, size_t destColumnStride, size_t numLeftRows, size_t numRightColumns, size_t productAxisLength)
-    {
-        size_t s = destOffset, l = leftOffset, r = rightOffset;
-        size_t leftColumnTotal = leftColumnStride * productAxisLength;
-        size_t rightRowTotal = rightRowStride * productAxisLength;
-        for (size_t i = 0; i < numLeftRows; i++)
-        {
-            for (size_t j = 0; j < numRightColumns; j++)
-            {
-                T sum = 0;
-                for (size_t k = 0; k < productAxisLength; k++)
-                {
-                    sum += leftData[l] * rightData[r];
-                    l += leftColumnStride;
-                    r += rightRowStride;
-                }
-                destData[s] = sum;
+    static inline bool find_isZero(T a) { return a == 0; }
+    static inline bool find_isNonZero(T a) { return a != 0; }
 
-                l -= leftColumnTotal;
-                r -= rightRowTotal;
-                r += rightColumnStride;
-                s += destColumnStride;
+public:
+    template <bool (*f)(T)>
+    Array<long> findWhere() const
+    {
+        auto list = std::vector<long>();
+        Coordinates c(mDim, 0);
+
+        T *pData = mData.mRaw;
+
+        for (size_t k = 0; k < mFlatLength; k++)
+        {
+            if (f(*(pData++)))
+                for (long i = 0; i < mDim; i++)
+                    list.push_back(c[i]);
+
+            for (long i = mDim - 1; i >= 0; i--)
+            {
+                c[i]++;
+
+                if (c[i] % mShape[i] == 0)
+                    c[i] = 0;
+                else
+                    break;
             }
-            r -= rightColumnStride * numRightColumns;
-            l += leftRowStride;
-            s -= destColumnStride * numRightColumns;
-            s += destRowStride;
         }
+
+        return Array<long>(Data<long>(list), Coordinates({list.size() / mDim, mDim}));
     }
 
-public:
-    /*Array<T> oldmatmul(const Array<T> &other) const
+    Array<long> findZero() const
     {
-        if (mDim < 2)
-            std::invalid_argument("Arrays need to have at least 2 dimensions for matrix multiplication");
+        return findWhere<find_isZero>();
+    }
 
-        if (mDim != other.mDim)
-            throw std::invalid_argument("Arrays do not have the same number of dimensions");
+    Array<long> findNonZero() const
+    {
+        return findWhere<find_isNonZero>();
+    }
 
-        for (int i = 0; i < mDim - 2; i++)
-            if (mShape[i] != other.mShape[i])
-                throw std::invalid_argument("Arrays do not have the same length in dimension " + std::to_string(i));
-
-        if (mShape[mDim - 1] != other.mShape[mDim - 2])
-            throw std::invalid_argument("Arrays do not have the same length in product dimension.");
-
-        size_t factorThis = mShape[mDim - 1] * mShape[mDim - 2];
-        size_t factorOther = mShape[mDim - 1] * other.mShape[mDim - 2];
-        size_t factorResult = mShape[mDim - 2] * other.mShape[mDim - 1];
-        size_t independentProducts = getFlatLength() / factorThis;
-        size_t resultFlatLength = independentProducts * factorResult;
-        size_t s;
-
-        auto resultData = std::vector<T>(resultFlatLength, 0);
-
-        for (size_t m = 0; m < independentProducts; m++)
-            for (size_t i = 0; i < mShape[mDim - 2]; i++)
-                for (size_t j = 0; j < other.mShape[mDim - 1]; j++)
-                {
-                    s = m * factorResult + i * other.mShape[mDim - 1] + j;
-                    for (size_t k = 0; k < mShape[mDim - 1]; k++)
-                        resultData[s] += mData[m * factorThis + i * mShape[mDim - 1] + k] * other.mData[m * factorOther + k * other.mShape[mDim - 1] + j];
-                }
-
-        auto newShape = mShape;
-        newShape[mDim - 1] = other.mShape[mDim - 1];
-        newShape[mDim - 2] = mShape[mDim - 2];
-        auto result = Array<T>(resultData, newShape);
-
-        return result;
-    }*/
-
-public:
     Array<T> pow(const unsigned int k) const
     {
         if (k > 4)
@@ -921,11 +1032,11 @@ public:
         return reduceSum(axes);
     }
 
-    T &operator[](const std::vector<int> indices) const { return get(indices); }
+    T &operator[](const Coordinates indices) const { return get(indices); }
 
     T &operator[](const int i) const { return getFlat(i); }
 
-    T &get(const std::vector<long> indices) const
+    T &get(const Coordinates indices) const
     {
         if (indices.size() != mDim)
             throw std::invalid_argument("The index tuple does not match the array shape");

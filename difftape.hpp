@@ -85,7 +85,7 @@ public:
         }
 
         if (outputPosition < inputPosition)
-            return Array<T>::constant(input.getShape(), 0);
+            return Array<T>::constant(input.refShape(), 0);
 
         if (gradientTarget != &output)
         {
@@ -126,12 +126,12 @@ public:
         mDiffTape.addVariable(this);
     };
 
-    Unit<T>(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mShape(array.getShape())
+    Unit<T>(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mShape(array.refShape())
     {
         mDiffTape.addVariable(this);
     };
 
-    Unit<T>(DiffTape<T> &diffTape, Array<T> &&array) : mDiffTape(diffTape), mArray(std::forward<Array<T>>(array)), mShape(array.getShape())
+    Unit<T>(DiffTape<T> &diffTape, Array<T> &&array) : mDiffTape(diffTape), mArray(std::forward<Array<T>>(array)), mShape(array.refShape())
     {
         mDiffTape.addVariable(this);
     };
@@ -141,7 +141,7 @@ public:
     Unit<T>(const Unit<T> &other) = delete;
     Unit<T>(Unit<T> &&other) = delete;
 
-    Coordinates getShape() const { return mShape; }
+    const Coordinates &refShape() const { return mShape; }
 
     virtual void pullGradient() = 0;
 
@@ -213,16 +213,29 @@ private:
     Unit<T> *mRight;
     long mLeftProductAxis;
     long mRightProductAxis;
+    Coordinates mReductionAxesLeft;
+    Coordinates mReductionAxesRight;
 
 public:
-    MatrixProduct<T>(Unit<T> *left, Unit<T> *right, long leftProductAxis = -1, long rightProductAxis = -2) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::matmulShape(left->getShape(), right->getShape(), leftProductAxis, rightProductAxis)), mLeftProductAxis(leftProductAxis), mRightProductAxis(rightProductAxis) {}
+    MatrixProduct<T>(Unit<T> *left, Unit<T> *right, long leftProductAxis = -1, long rightProductAxis = -2) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::matmulShape(left->refShape(), right->refShape(), leftProductAxis, rightProductAxis)), mLeftProductAxis(leftProductAxis), mRightProductAxis(rightProductAxis) {
+        for (long i = 0; i < this->mShape.size(); i++)
+        {
+            if (i != mLeftProductAxis && i != mRightProductAxis)
+            {
+                if (left->refShape()[i] < this->mShape[i])
+                    mReductionAxesLeft.pushBack(i);
+                if (right->refShape()[i] < this->mShape[i])
+                    mReductionAxesRight.pushBack(i);
+            }
+        }
+    }
 
     void pullGradient() override
     {
         auto leftTranspose = mLeft->mArray.transpose(mLeftProductAxis, mRightProductAxis);
         auto rightTranspose = mRight->mArray.transpose(mLeftProductAxis, mRightProductAxis);
-        mLeft->mGradient += Array<T>::matmul(this->mGradient, rightTranspose, mLeftProductAxis, mRightProductAxis);
-        mRight->mGradient += Array<T>::matmul(leftTranspose, this->mGradient, mLeftProductAxis, mRightProductAxis);
+        mLeft->mGradient += Array<T>::matmul(this->mGradient, rightTranspose, mLeftProductAxis, mRightProductAxis).reduceSum(mReductionAxesLeft, true);
+        mRight->mGradient += Array<T>::matmul(leftTranspose, this->mGradient, mLeftProductAxis, mRightProductAxis).reduceSum(mReductionAxesRight, true);;
     }
 
     void calculate() override
@@ -241,10 +254,10 @@ protected:
     Coordinates mReductionAxesLeft;
     Coordinates mReductionAxesRight;
 
-    BinaryPointwiseOperation<T>(Unit<T> *left, Unit<T> *right) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::broadcastShape(left->getShape(), right->getShape()))
+    BinaryPointwiseOperation<T>(Unit<T> *left, Unit<T> *right) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::broadcastShape(left->refShape(), right->refShape()))
     {
-        mReductionAxesLeft = Coordinates::findDifferences(left->getShape(), this->mShape);
-        mReductionAxesRight = Coordinates::findDifferences(right->getShape(), this->mShape);
+        mReductionAxesLeft = Coordinates::findDifferences(left->refShape(), this->mShape);
+        mReductionAxesRight = Coordinates::findDifferences(right->refShape(), this->mShape);
     }
 };
 
@@ -337,7 +350,7 @@ private:
     T mScalar;
 
 public:
-    Scale<T>(Unit<T> *source, T scalar) : Unit<T>(source->mDiffTape, source->getShape())
+    Scale<T>(Unit<T> *source, T scalar) : Unit<T>(source->mDiffTape, source->refShape())
     {
         mSource = source;
         mScalar = scalar;
@@ -363,7 +376,7 @@ private:
     T mTranslate;
 
 public:
-    Translate<T>(Unit<T> *source, T translate) : Unit<T>(source->mDiffTape, source->getShape())
+    Translate<T>(Unit<T> *source, T translate) : Unit<T>(source->mDiffTape, source->refShape())
     {
         mSource = source;
         mTranslate = translate;
@@ -390,7 +403,7 @@ private:
     const std::function<T(T, T)> mdF;
 
 public:
-    Elementwise<T>(Unit<T> *source, std::function<T(T, T)> f, std::function<T(T, T)> dF) : Unit<T>(source->mDiffTape, source->getShape()), mSource(source), mF(f), mdF(dF) {}
+    Elementwise<T>(Unit<T> *source, std::function<T(T, T)> f, std::function<T(T, T)> dF) : Unit<T>(source->mDiffTape, source->refShape()), mSource(source), mF(f), mdF(dF) {}
 
     void pullGradient() override
     {
@@ -470,4 +483,9 @@ ReduceSum<T> &reduceSum(Unit<T> &source)
     return *(new ReduceSum<T>(&source));
 }
 
+template <typename T>
+MatrixProduct<T> &matmul(Unit<T> &left, Unit<T> &right, long leftProductAxis = -1, long rightProductAxis = -2)
+{
+    return *(new MatrixProduct<T>(&left, &right, leftProductAxis, rightProductAxis));
+}
 #endif

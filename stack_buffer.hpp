@@ -71,6 +71,17 @@ public:
         return std::vector<T>(mBuffer, mBuffer + mSize);
     }
 
+    StackBuffer(T front, const StackBuffer &other)
+    {
+        if (other.mSize == BUFFER_SIZE)
+            throw std::out_of_range("The buffer of argument StackBuffer is already full.");
+
+        mSize = other.mSize+1;
+
+        mBuffer[0] = front;
+        std::copy(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer+1);
+    }
+
     StackBuffer(const StackBuffer &other)
     {
         mSize = other.mSize;
@@ -103,6 +114,18 @@ public:
         std::move(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer);
 
         return *this;
+    }
+
+    bool operator==(const StackBuffer &&other)
+    {
+        if (mSize != other.mSize)
+            return false;
+
+        for (size_t i = 0; i < mSize; i++)
+            if (mBuffer[i] != other.mBuffer[i])
+                return false;
+
+        return true;
     }
 
     static StackBuffer<T, BUFFER_SIZE> findDifferences(const StackBuffer<T, BUFFER_SIZE> &a, const StackBuffer<T, BUFFER_SIZE> &b)
