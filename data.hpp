@@ -140,11 +140,15 @@ public:
         return *this;
     }
 
-    Data<T> copy() const
+    Data<T> copy(long start = 0, long end = -1) const
     {
-        size_t s = size();
+        if (end == -1)
+            end = size();
+        assertm(start >= 0 && end <= size() && start <= end, "Invalid copy parameters!");
+        
+        size_t s = end - start;
         T *newRaw = new T[s];
-        std::copy(mRaw, mRaw + size(), newRaw);
+        std::copy(mRaw+start, mRaw + end, newRaw);
         return Data<T>(newRaw, s);
     }
 

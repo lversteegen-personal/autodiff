@@ -55,6 +55,7 @@ public:
 private:
     Coordinates mShape;
     Coordinates mStrides;
+    long mOffset = 0;
     bool transposed = false;
 
 private:
@@ -71,14 +72,14 @@ public:
     Array<T>() = delete;
 
     Array<T>(const Array<T> &other) : mData(other.mData),
-                                      mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(other.mStrides), mDim(other.mDim)
+                                      mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(other.mStrides), mDim(other.mDim), mOffset(other.mOffset), transposed(other.transposed)
     {
     }
 
     Array<T>(Array<T> &&other) = default;
 
 private:
-    Array<T>(const Data<T> &data, const Coordinates &shape, const Coordinates &strides) : mData(data), mFlatLength(mData.size()), mDim(shape.size()), mShape(shape), mStrides(strides)
+    Array<T>(const Data<T> &data, const Coordinates &shape, const Coordinates &strides, const long offset = 0) : mData(data), mFlatLength(mData.size()), mDim(shape.size()), mShape(shape), mStrides(strides), mOffset(offset)
     {
     }
 
@@ -88,7 +89,7 @@ public:
         mData[0] = single;
     }
 
-    Array<T>(const Data<T> &data, const Coordinates &shape) : mData(data), mFlatLength(mData.size()), mShape(shape), mDim(shape.size()), mStrides(shape.size())
+    Array<T>(const Data<T> &data, const Coordinates &shape, const long offset = 0) : mData(data), mFlatLength(mData.size()), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset)
     {
         calculateStrides();
     }
@@ -103,11 +104,11 @@ public:
     {
         if (transposed)
         {
-            auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides);
+            auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides, 0);
             return destUnary<copy>(result, *this);
         }
         else
-            return Array<T>(mData.copy(), mShape, mStrides);
+            return Array<T>(mData.copy(mOffset, mOffset + mFlatLength), mShape, mStrides);
     }
 
     bool isTransposed() const { return transposed; }
@@ -163,12 +164,27 @@ public:
 
     Array<T> &operator=(const T value)
     {
-        for (size_t i = 0; i < getFlatLength(); i++)
-        {
-            mData[i] = value;
-        }
+        T *pData = mData.mRaw + mOffset;
 
-        return *this;
+        Coordinates c(mDim, 0);
+
+        while (c[0] < mShape[0])
+        {
+            *pData = value;
+
+            for (long i = mDim - 1; i >= 0; i--)
+            {
+                c[i]++;
+
+                if (mShape[i] == 1 || c[i] % mShape[i] == 0)
+                    pData -= mStrides[i] * (mShape[i] - 1);
+                else
+                    pData += mStrides[i];
+
+                if (c[i] % mShape[i] != 0)
+                    break;
+            }
+        }
     }
 
     static Coordinates calculateStrides(const Coordinates &shape)
@@ -203,7 +219,6 @@ private:
     }
 
 public:
-
     static Array<T> fromFlatLines(const std::vector<Data<T>> &lines)
     {
         if (lines.size() == 0)
@@ -327,30 +342,8 @@ public:
             flatLength *= shape[i];
         }
 
-        auto data = Data<T>(flatLength);
-        size_t j = 0;
-
-        Coordinates c(mDim, 0);
-
-        for (size_t k = 0; k < flatLength; k++)
-        {
-            data[k] = mData[j];
-
-            for (long i = mDim - 1; i >= 0; i--)
-            {
-                c[i]++;
-
-                if (mShape[i] == 1 || c[i] % mShape[i] == 0)
-                    j -= mStrides[i] * (mShape[i] - 1);
-                else
-                    j += mStrides[i];
-
-                if (c[i] % shape[i] != 0)
-                    break;
-            }
-        }
-
-        return Array<T>(data, shape, newStrides);
+        auto result = Array<T>(Data<T>(flatLength), shape, newStrides);
+        return destUnary<copy>(result, *this);
     }
 
 private:
@@ -361,8 +354,8 @@ private:
     {
         assertm(isSubshape(source.mShape, dest.mShape), "Source array is not a subshape of the destination array.");
 
-        U *pDestData = dest.mData.mRaw;
-        T *pSourceData = source.mData.mRaw;
+        U *pDestData = dest.mData.mRaw + dest.mOffset;
+        T *pSourceData = source.mData.mRaw + source.mOffset;
 
         Coordinates c(dest.mDim, 0);
 
@@ -413,9 +406,9 @@ private:
         assertm(isSubshape(left.mShape, dest.mShape), "Left array is not a subshape of the destination array.");
         assertm(isSubshape(right.mShape, dest.mShape), "Right array is not a subshape of the destination array.");
 
-        U *pDestData = dest.mData.mRaw;
-        T *pLeftData = left.mData.mRaw;
-        T *pRightData = right.mData.mRaw;
+        U *pDestData = dest.mData.mRaw + dest.mOffset;
+        T *pLeftData = left.mData.mRaw + left.mOffset;
+        T *pRightData = right.mData.mRaw + right.mOffset;
 
         long maxDim = std::max({dest.mDim, left.mDim, right.mDim});
         long minDimDest = maxDim - dest.mDim;
@@ -462,25 +455,17 @@ private:
     }
 
 public:
-    Array<T> &applyFunction(const std::function<T(T)> f)
+    template <T (*f)(T, T)>
+    Array<T> &unaryApply()
     {
-        for (size_t k = 0; k < mFlatLength; k++)
-        {
-            mData[k] = f(mData[k]);
-        }
-
-        return *this;
+        return destUnary<T, f>(*this, *this);
     }
 
-    static Array<T> applyFunction(const Array<T> &array, const std::function<T(T)> f)
+    template <typename U, U (*f)(T)>
+    static Array<U> unaryCompute(const Array<T> &source)
     {
-        auto data = Data<T>(array.mFlatLength);
-        for (size_t k = 0; k < array.mFlatLength; k++)
-        {
-            data[k] = f(array.mData[k]);
-        }
-
-        return Array<T>(data, array.mShape, array.mStrides);
+        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
+        return destUnary<U, f>(result, source);
     }
 
     template <T (*f)(T, T)>
@@ -491,9 +476,7 @@ public:
         if ((broadcastType & BroadcastType::LEFT) == 0)
             throw std::invalid_argument("Other array is not a subshape of this array.");
 
-        binaryDestCombine<T, f>(*this, *this, other);
-
-        return *this;
+        return binaryDestCombine<T, f>(*this, *this, other);
     }
 
     template <typename U, U (*f)(T, T)>
@@ -949,7 +932,7 @@ public:
         return Array<T>(resultData, mShape);
     }
 
-    Array<T> reduceSum(const Coordinates &axes, bool leaveOnes = false) const
+    Array<T> reduceSum(const Coordinates &axes, bool keepDims = false) const
     {
         bool reduce[MAX_DIM] = {false};
         long j = 0;
@@ -961,7 +944,7 @@ public:
         }
 
         int newDim;
-        if (leaveOnes)
+        if (keepDims)
             newDim = mDim;
         else
         {
@@ -987,7 +970,7 @@ public:
                 putStrides[i] = multiplier;
                 multiplier *= mShape[i];
             }
-            else if (leaveOnes)
+            else if (keepDims)
                 newShape[j--] = 1;
 
         long flatLength = calculateFlatLength(newShape);
@@ -1032,13 +1015,70 @@ public:
         return reduceSum(axes);
     }
 
+    Array<T> take(Coordinates at, bool keepDims = false)
+    {
+        Coordinates to(at.size());
+        for (int i = 0; i < at.size(); i++)
+            to[i] = at[i] + 1;
+
+        return slice(at, to, keepDims);
+    }
+
+    Array<T> slice(Coordinates from, Coordinates to, bool keepDims = false)
+    {
+        if (from.size() > mDim || to.size() > mDim)
+            throw std::invalid_argument("The index tuples cannot be longer than the array dimension.");
+        if (from.size() != to.size())
+            throw std::invalid_argument("The index tuples must have the same length.");
+
+        Coordinates newShape(0);
+        Coordinates newStrides(0);
+        long flatlength = 1;
+        long offset = 0;
+
+        for (long i = 0; i < mDim; i++)
+        {
+            if (i < from.size())
+            {
+                from[i] = from[i] % mShape[i];
+                to[i] = to[i] % mShape[i];
+
+                if (from[i] < 0)
+                    from[i] += mShape[i];
+                if (to[i] < 0)
+                    to[i] += mShape[i];
+
+                if (from[i] >= to[i])
+                    throw std::invalid_argument("To must be larger than from mod shape.");
+
+                offset += from[i] * mStrides[i];
+
+                if (from[i] + 1 != to[i] || keepDims)
+                {
+                    newShape.pushBack(to[i] - from[i] + 1);
+                    newStrides.pushBack(mStrides[i]);
+                    flatlength *= to[i] - from[i] + 1;
+                }
+            }
+            else
+            {
+                newShape.pushBack(mShape[i]);
+                newStrides.pushBack(mStrides[i]);
+                flatlength *= mShape[i];
+            }
+        }
+
+        return Array<T>(mData, newShape, newStrides, offset);
+    }
+
     T &operator[](const Coordinates indices) const { return get(indices); }
 
-    T &operator[](const int i) const { return getFlat(i); }
+    // This is too easily confused with taking a slice
+    // T &operator[](const int i) const { return get({i}); }
 
     T &get(const Coordinates indices) const
     {
-        if (indices.size() != mDim)
+        if (indices.size() = mDim)
             throw std::invalid_argument("The index tuple does not match the array shape");
         size_t combinedIndex = 0;
         long ix;
@@ -1068,7 +1108,7 @@ public:
 
     std::string to_string() const
     {
-        if (getFlatLength() > 100)
+        if (getFlatLength() > 10000)
             return "Output too long. Flat length is " + std::to_string(getFlatLength());
 
         std::ostringstream oss;

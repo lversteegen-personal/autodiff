@@ -52,9 +52,9 @@ class Loader {
             Data<int> label({std::stoi(tokens[0])});
 
             Data<double> data(tokens.size() - 1);
-            for (size_t i = 1; i < tokens.size(); i++)
+            for (size_t i = 0; i < tokens.size()-1; i++)
             {
-                data[i] = std::stod(tokens[i]);
+                data[i] = std::stod(tokens[i+1]);
             }
 
             lineData.push_back(data);

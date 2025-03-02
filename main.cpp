@@ -28,7 +28,7 @@ int main()
     auto mnist = Loader::loadMNIST(10);
     Array<double> images(mnist.data.reshape({-1, 28, 28}));
     Array<int> labels(mnist.label.reshape({-1}));
-    std::cout << images[0] << std::endl;
+    std::cout << images.take(0) << std::endl;
 
     /*auto diffTape = DiffTape<double>(true);
     auto& x = *(new Coefficients<double>(diffTape, randomArrayGenerator.uniformInteger<double>({1,3,3}, 0, 3)));
