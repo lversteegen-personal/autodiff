@@ -25,7 +25,7 @@ public:
         mSize = 0;
     }
 
-    StackBuffer(size_t size)
+    explicit StackBuffer(size_t size)
     {
         if (size > BUFFER_SIZE)
             throw std::invalid_argument("Size cannot be bigger than buffer size.");
@@ -49,7 +49,7 @@ public:
         std::copy(data, data + size, mBuffer);
     }*/
 
-    StackBuffer(const std::vector<T> &vector)
+    explicit StackBuffer(const std::vector<T> &vector)
     {
         mSize = vector.size();
         std::copy(vector.data(), vector.data() + std::min(BUFFER_SIZE, vector.size()), mBuffer);

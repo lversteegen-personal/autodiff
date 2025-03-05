@@ -13,6 +13,7 @@
 #include <memory>
 #include <functional>
 #include <array>
+#include <limits>
 
 #include <cassert>
 // Use (void) to silence unused warnings.
@@ -79,7 +80,7 @@ public:
     Array<T>(Array<T> &&other) = default;
 
 private:
-    Array<T>(const Data<T> &data, const Coordinates &shape, const Coordinates &strides, const long offset = 0) : mData(data), mFlatLength(mData.size()), mDim(shape.size()), mShape(shape), mStrides(strides), mOffset(offset)
+    Array<T>(const Data<T> &data, const Coordinates &shape, const Coordinates &strides, const long offset = 0) : mData(data), mFlatLength(calculateFlatLength(shape)), mDim(shape.size()), mShape(shape), mStrides(strides), mOffset(offset)
     {
     }
 
@@ -89,7 +90,7 @@ public:
         mData[0] = single;
     }
 
-    Array<T>(const Data<T> &data, const Coordinates &shape, const long offset = 0) : mData(data), mFlatLength(mData.size()), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset)
+    Array<T>(const Data<T> &data, const Coordinates &shape, const long offset = 0) : mData(data), mFlatLength(calculateFlatLength(shape)), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset)
     {
         calculateStrides();
     }
@@ -105,7 +106,7 @@ public:
         if (transposed)
         {
             auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides, 0);
-            return destUnary<copy>(result, *this);
+            return destUnary<T, copy>(result, *this);
         }
         else
             return Array<T>(mData.copy(mOffset, mOffset + mFlatLength), mShape, mStrides);
@@ -354,6 +355,12 @@ private:
     {
         assertm(isSubshape(source.mShape, dest.mShape), "Source array is not a subshape of the destination array.");
 
+        if (dest.mDim == 0)
+        {
+            dest.mData[dest.mOffset] = f(source.mData[source.mOffset]);
+            return dest;
+        }
+
         U *pDestData = dest.mData.mRaw + dest.mOffset;
         T *pSourceData = source.mData.mRaw + source.mOffset;
 
@@ -367,12 +374,16 @@ private:
             {
                 c[i]++;
 
-                if (dest.mShape[i] == 1 || c[i] % dest.mShape[i] == 0)
+                if (dest.mShape[i] == 1)
+                    ;
+                else if (c[i] % dest.mShape[i] == 0)
                     pDestData -= dest.mStrides[i] * (dest.mShape[i] - 1);
                 else
                     pDestData += dest.mStrides[i];
 
-                if (source.mShape[i] == 1 || c[i] % source.mShape[i] == 0)
+                if (source.mShape[i] == 1)
+                    ;
+                else if (c[i] % source.mShape[i] == 0)
                     pSourceData -= source.mStrides[i] * (source.mShape[i] - 1);
                 else
                     pSourceData += source.mStrides[i];
@@ -390,6 +401,8 @@ private:
     static inline T subtract(T a, T b) { return a - b; }
     static inline T divide(T a, T b) { return a / b; }
     static inline T modulo(T a, T b) { return a % b; }
+    static inline T max (T a, T b) { return a > b ? a : b; }
+    static inline T min (T a, T b) { return a < b ? a : b; }
     static inline T logical_and(T a, T b) { return a && b; }
     static inline T logical_or(T a, T b) { return a || b; }
 
@@ -405,6 +418,12 @@ private:
     {
         assertm(isSubshape(left.mShape, dest.mShape), "Left array is not a subshape of the destination array.");
         assertm(isSubshape(right.mShape, dest.mShape), "Right array is not a subshape of the destination array.");
+
+        if (dest.mDim == 0)
+        {
+            dest.mData[dest.mOffset] = f(left.mData[left.mOffset], right.mData[right.mOffset]);
+            return dest;
+        }
 
         U *pDestData = dest.mData.mRaw + dest.mOffset;
         T *pLeftData = left.mData.mRaw + left.mOffset;
@@ -425,28 +444,105 @@ private:
             {
                 c[i]++;
 
-                if (i < minDimDest)
+                if (i < minDimDest || dest.mShape[i] == 1)
                     ;
-                else if (dest.mShape[i] == 1 || c[i] % dest.mShape[i] == 0)
+                else if (c[i] % dest.mShape[i] == 0)
                     pDestData -= dest.mStrides[i] * (dest.mShape[i] - 1);
                 else
                     pDestData += dest.mStrides[i];
 
-                if (i < minDimLeft)
+                if (i < minDimLeft || left.mShape[i] == 1)
                     ;
-                else if (left.mShape[i] == 1 || c[i] % left.mShape[i] == 0)
+                else if (c[i] % left.mShape[i] == 0)
                     pLeftData -= left.mStrides[i] * (left.mShape[i] - 1);
                 else
                     pLeftData += left.mStrides[i];
 
-                if (i < minDimRight)
+                if (i < minDimRight || right.mShape[i] == 1)
                     ;
-                else if (right.mShape[i] == 1 || c[i] % right.mShape[i] == 0)
+                else if (c[i] % right.mShape[i] == 0)
                     pRightData -= right.mStrides[i] * (right.mShape[i] - 1);
                 else
                     pRightData += right.mStrides[i];
 
                 if (c[i] % dest.mShape[i] != 0)
+                    break;
+            }
+        }
+
+        return dest;
+    }
+
+    template <typename U, U (*f)(const U, const T)>
+    Array<U> reduce(const U &initial, const Coordinates &axes, bool keepDims = false) const
+    {
+        if (mDim == 0)
+            return copy();
+
+        bool reduce[MAX_DIM] = {false};
+        long j = 0;
+        for (int i = 0; i < axes.size(); i++)
+        {
+            j = axes[i] % mDim;
+            j = j < 0 ? mDim + j : j;
+            reduce[j] = true;
+        }
+
+        int newDim;
+        if (keepDims)
+            newDim = mDim;
+        else
+            newDim = mDim - axes.size();
+
+        Coordinates newShape(newDim);
+        Coordinates newStrides(newDim, 0);
+        Coordinates putStrides(mDim, 0);
+        j = newDim - 1;
+        long flatLength = 1;
+
+        for (int i = mDim - 1; i >= 0; i--)
+            if (!reduce[i])
+            {
+                putStrides[i] = flatLength;
+                newStrides[j] = flatLength;
+                newShape[j--] = mShape[i];
+                flatLength *= mShape[i];
+            }
+            else if (keepDims)
+                newShape[j--] = 1;
+
+        auto data = Data<U>(flatLength);
+        data = initial;
+        auto dest = Array<U>(data, newShape, newStrides);
+
+        U *pDestData = dest.mData.mRaw;
+        T *pSourceData = mData.mRaw + mOffset;
+
+        Coordinates c(mDim, 0);
+
+        while (c[0] < mShape[0])
+        {
+           *pDestData = f(*pDestData, *pSourceData);
+
+            for (long i = mDim - 1; i >= 0; i--)
+            {
+                c[i]++;
+
+                if (reduce[i] || mShape[i] == 1)
+                    ;
+                else if (c[i] % mShape[i] == 0)
+                    pDestData -= putStrides[i] * (mShape[i] - 1);
+                else
+                    pDestData += putStrides[i];
+
+                if (mShape[i] == 1)
+                    ;
+                else if (c[i] % mShape[i] == 0)
+                    pSourceData -= mStrides[i] * (mShape[i] - 1);
+                else
+                    pSourceData += mStrides[i];
+
+                if (c[i] % mShape[i] != 0)
                     break;
             }
         }
@@ -934,76 +1030,14 @@ public:
 
     Array<T> reduceSum(const Coordinates &axes, bool keepDims = false) const
     {
-        bool reduce[MAX_DIM] = {false};
-        long j = 0;
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
         for (int i = 0; i < axes.size(); i++)
-        {
-            j = axes[i] % mDim;
-            j = j < 0 ? mDim + j : j;
-            reduce[j] = true;
-        }
+            if (axes[i] < 0 || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
 
-        int newDim;
-        if (keepDims)
-            newDim = mDim;
-        else
-        {
-            newDim = mDim - axes.size();
-            if (newDim == 0)
-            {
-                T sum = 0;
-                for (size_t i = 0; i < mFlatLength; i++)
-                    sum += mData[i];
-                return Array<T>(Data<T>({sum}));
-            }
-        }
-
-        Coordinates newShape(newDim);
-        Coordinates putStrides(mDim, 0);
-        j = newDim - 1;
-        long multiplier = 1;
-
-        for (int i = mDim - 1; i >= 0; i--)
-            if (!reduce[i])
-            {
-                newShape[j--] = mShape[i];
-                putStrides[i] = multiplier;
-                multiplier *= mShape[i];
-            }
-            else if (keepDims)
-                newShape[j--] = 1;
-
-        long flatLength = calculateFlatLength(newShape);
-        auto data = Data<T>(flatLength);
-        data = 0;
-
-        Coordinates c(mDim, 0);
-        long m = 0, n = 0;
-
-        for (long k = 0; k < mFlatLength; k++)
-        {
-            data[m] += mData[n];
-
-            for (int i = mDim - 1; i >= 0; i--)
-            {
-                c[i]++;
-
-                if (c[i] % mShape[i] == 0)
-                {
-                    c[i] = 0;
-                    n -= mStrides[i] * (mShape[i] - 1);
-                    m -= putStrides[i] * (mShape[i] - 1);
-                }
-                else
-                {
-                    n += mStrides[i];
-                    m += putStrides[i];
-                    break;
-                }
-            }
-        }
-
-        return Array<T>(data, newShape);
+        return reduce<T,add>(0,axes, keepDims);
     }
 
     Array<T> reduceSum() const
@@ -1012,19 +1046,82 @@ public:
         for (int i = 0; i < mDim; i++)
             axes[i] = i;
 
-        return reduceSum(axes);
+        return reduce<T,add>(0,axes);
+    }
+
+    Array<T> reduceProduct(const Coordinates &axes, bool keepDims = false) const
+    {
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
+        for (int i = 0; i < axes.size(); i++)
+            if (axes[i] < 0 || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
+
+        return reduce<T,multiply>(1,axes, keepDims);
+    }
+
+    Array<T> reduceProduct() const
+    {
+        Coordinates axes(mDim);
+        for (int i = 0; i < mDim; i++)
+            axes[i] = i;
+
+        return reduce<T,multiply>(1,axes);
+    }
+
+    Array<T> reduceMax(const Coordinates &axes, bool keepDims = false) const
+    {
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
+        for (int i = 0; i < axes.size(); i++)
+            if (axes[i] < 0 || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
+
+        return reduce<T,max>(std::numeric_limits<T>::lowest(),axes, keepDims);
+    }
+
+    Array<T> reduceMax() const
+    {
+        Coordinates axes(mDim);
+        for (int i = 0; i < mDim; i++)
+            axes[i] = i;
+
+        return reduce<T,max>(std::numeric_limits<T>::lowest(),axes);
+    }
+
+    Array<T> reduceMin(const Coordinates &axes, bool keepDims = false) const
+    {
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
+        for (int i = 0; i < axes.size(); i++)
+            if (axes[i] < 0 || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
+
+        return reduce<T,min>(std::numeric_limits<T>::max(),axes, keepDims);
+    }
+
+    Array<T> reduceMin() const
+    {
+        Coordinates axes(mDim);
+        for (int i = 0; i < mDim; i++)
+            axes[i] = i;
+
+        return reduce<T,min>(std::numeric_limits<T>::max(),axes);
     }
 
     Array<T> take(Coordinates at, bool keepDims = false)
     {
         Coordinates to(at.size());
         for (int i = 0; i < at.size(); i++)
-            to[i] = at[i] + 1;
+            to[i] = at[i];
 
         return slice(at, to, keepDims);
     }
 
-    Array<T> slice(Coordinates from, Coordinates to, bool keepDims = false)
+    Array<T> slice(Coordinates &from, Coordinates &to, bool keepDims = false)
     {
         if (from.size() > mDim || to.size() > mDim)
             throw std::invalid_argument("The index tuples cannot be longer than the array dimension.");
@@ -1048,16 +1145,21 @@ public:
                 if (to[i] < 0)
                     to[i] += mShape[i];
 
-                if (from[i] >= to[i])
-                    throw std::invalid_argument("To must be larger than from mod shape.");
+                if (from[i] > to[i])
+                    throw std::invalid_argument("To cannot be smaller than from mod shape.");
 
                 offset += from[i] * mStrides[i];
 
-                if (from[i] + 1 != to[i] || keepDims)
+                if (from[i] != to[i])
                 {
                     newShape.pushBack(to[i] - from[i] + 1);
                     newStrides.pushBack(mStrides[i]);
                     flatlength *= to[i] - from[i] + 1;
+                }
+                else if (keepDims)
+                {
+                    newShape.pushBack(1);
+                    newStrides.pushBack(0);
                 }
             }
             else
@@ -1114,7 +1216,7 @@ public:
         std::ostringstream oss;
         size_t m = 0;
 
-        for (size_t i = 0; i < getFlatLength(); i++)
+        for (size_t i = 0; i < mFlatLength; i++)
         {
             m = i;
             for (long j = mDim - 1; j >= 0; j--)
