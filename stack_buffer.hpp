@@ -71,17 +71,6 @@ public:
         return std::vector<T>(mBuffer, mBuffer + mSize);
     }
 
-    StackBuffer(T front, const StackBuffer &other)
-    {
-        if (other.mSize == BUFFER_SIZE)
-            throw std::out_of_range("The buffer of argument StackBuffer is already full.");
-
-        mSize = other.mSize+1;
-
-        mBuffer[0] = front;
-        std::copy(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer+1);
-    }
-
     StackBuffer(const StackBuffer &other)
     {
         mSize = other.mSize;
@@ -94,13 +83,21 @@ public:
         std::move(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer);
     }
 
+    StackBuffer &operator=(const T value)
+    {
+        for (size_t i = 0; i < mSize; i++)
+            mBuffer[i] = value;
+
+        return *this;
+    }
+
     StackBuffer &operator=(const StackBuffer &other)
     {
         if (this == &other)
             return *this;
 
         mSize = other.mSize;
-        std::copy(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer);
+        std::copy(other.mBuffer, other.mBuffer + other.mSize, mBuffer);
 
         return *this;
     }
@@ -111,9 +108,35 @@ public:
             return *this;
 
         mSize = other.mSize;
-        std::move(other.mBuffer, other.mBuffer + BUFFER_SIZE, mBuffer);
+        std::move(other.mBuffer, other.mBuffer + other.mSize, mBuffer);
 
         return *this;
+    }
+
+    StackBuffer operator+(const StackBuffer<T, BUFFER_SIZE> &other) const
+    {
+        if (mSize + other.mSize > BUFFER_SIZE)
+            throw std::out_of_range("The new size would be large than BUFFER_SIZE.");
+
+        auto result = StackBuffer(mSize + other.mSize);
+
+        std::copy(mBuffer, mBuffer + mSize, result.mBuffer);
+        std::copy(other.mBuffer, other.mBuffer + other.mSize, result.mBuffer + mSize);
+
+        return result;
+    }
+
+    StackBuffer operator+(const T append) const
+    {
+        if (mSize + 1 > BUFFER_SIZE)
+            throw std::out_of_range("The new size would be large than BUFFER_SIZE.");
+
+        auto result = StackBuffer(mSize + 1);
+
+        std::copy(mBuffer, mBuffer + mSize, result.mBuffer);
+        result[mSize] = append;
+
+        return result;
     }
 
     bool operator==(const StackBuffer &&other)
@@ -138,6 +161,20 @@ public:
         return result;
     }
 
+    StackBuffer<T, BUFFER_SIZE> rightShift(T value, size_t reps = 1) const
+    {
+        if (mSize + reps > BUFFER_SIZE)
+            throw std::out_of_range("The new size would be large than BUFFER_SIZE.");
+
+        auto result = StackBuffer(mSize + reps);
+
+        for (size_t i = 0; i < reps; i++)
+            result.mBuffer[i] = value;
+        std::copy(mBuffer, mBuffer + mSize, result.mBuffer + reps);
+
+        return result;
+    }
+
     void pushBack(const T &value)
     {
         if (mSize >= BUFFER_SIZE)
@@ -157,19 +194,19 @@ public:
         return mBuffer[i];
     }
 
-    const T* begin() const {
+    const T *begin() const
+    {
         return mBuffer;
     }
 
-    const T* end() const
+    const T *end() const
     {
-        return mBuffer+mSize;
+        return mBuffer + mSize;
     }
-
 };
 
 template <typename T, size_t BUFFER_SIZE>
-std::ostream &operator<<(std::ostream &s, const StackBuffer<T,BUFFER_SIZE> &buffer)
+std::ostream &operator<<(std::ostream &s, const StackBuffer<T, BUFFER_SIZE> &buffer)
 {
     s.put('[');
     for (char comma[]{'\0', ' ', '\0'}; const T &e : buffer)

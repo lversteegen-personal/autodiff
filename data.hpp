@@ -4,12 +4,15 @@
 #include <vector>
 
 template <typename T>
+concept DataType = std::is_arithmetic_v<T>;
+
+template <DataType T>
 class Array;
 
-template <typename T>
+template <DataType T>
 class Data
 {
-    template <typename U> friend class Array;
+    template <DataType U> friend class Array;
 private:
     class Control
     {

@@ -16,28 +16,26 @@
 
 #include "array.hpp"
 
-template <typename T>
+template <DataType T>
 class Unit;
 
-template <typename T>
+template <DataType T>
 class DiffTape
 {
+    friend int main();
     static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
 
 private:
     std::vector<Unit<T> *> mUnits;
     std::unordered_map<Unit<T> *, long> mOrder;
 
-    bool mEager = false;
+    const bool mEager = false;
     long mCalcProgress = -1;
     Unit<T> *gradientTarget = nullptr;
 
 public:
     DiffTape<T>() = default;
-    DiffTape<T>(bool eager)
-    {
-        mEager = eager;
-    }
+    // DiffTape<T>(bool eager) : mEager(eager) {}
 
     ~DiffTape()
     {
@@ -49,8 +47,6 @@ public:
     {
         mOrder[px] = mUnits.size();
         mUnits.push_back(px);
-        if (mEager)
-            px->calculate();
         gradientTarget = nullptr;
     }
 
@@ -103,7 +99,7 @@ public:
     }
 };
 
-template <typename T>
+template <DataType T>
 class Unit
 {
     static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
@@ -189,18 +185,29 @@ class ReduceSum : public Unit<T>
 {
 private:
     Unit<T> *mSource;
+    const Coordinates mAxes;
+    Coordinates mKeepDimsShape;
+    const bool mKeepDims;
 
 public:
-    ReduceSum<T>(Unit<T> *source) : mSource(source), Unit<T>(source->getDiffTape(), Coordinates(1, 1)) {}
+    ReduceSum<T>(Unit<T> *source, const Coordinates &axes, bool keepDims = false) : mSource(source), mAxes(axes), mKeepDims(keepDims), Unit<T>(source->getDiffTape(), Array<T>::reducedShape(source->refShape(), axes, keepDims)),
+                                                                                    mKeepDimsShape(mKeepDims ? Unit<T>::mShape : Array<T>::reducedShape(source->refShape(), axes, true)) {}
+
+    /*ReduceSum<T>(Unit<T> *source) : mSource(source), mKeepDims(false), Unit<T>(source->getDiffTape(), Array<T>::reducedShape(source->mShape, Coordinates(0)))
+    {
+        mAxes = Coordinates(source->mShape.size());
+        for (size_t i = 0; i < mAxes.size(); i++)
+            mAxes[i] = i;
+    }*/
 
     void pullGradient() override
     {
-        mSource->mGradient += this->mGradient[0];
+        mSource->mGradient += this->mGradient.reshape(mKeepDimsShape);
     }
 
     void calculate() override
     {
-        this->mArray = Array<T>({mSource->mArray.reduceSum()});
+        this->mArray = Array<T>({mSource->mArray.reduceSum(mAxes, mKeepDims)});
         Unit<T>::calculate();
     };
 };
@@ -211,13 +218,14 @@ class MatrixProduct : public Unit<T>
 private:
     Unit<T> *mLeft;
     Unit<T> *mRight;
-    long mLeftProductAxis;
-    long mRightProductAxis;
+    const long mLeftProductAxis;
+    const long mRightProductAxis;
     Coordinates mReductionAxesLeft;
     Coordinates mReductionAxesRight;
 
 public:
-    MatrixProduct<T>(Unit<T> *left, Unit<T> *right, long leftProductAxis = -1, long rightProductAxis = -2) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::matmulShape(left->refShape(), right->refShape(), leftProductAxis, rightProductAxis)), mLeftProductAxis(leftProductAxis), mRightProductAxis(rightProductAxis) {
+    MatrixProduct<T>(Unit<T> *left, Unit<T> *right, long leftProductAxis = -1, long rightProductAxis = -2) : mLeft(left), mRight(right), Unit<T>(left->getDiffTape(), Array<T>::matmulShape(left->refShape(), right->refShape(), leftProductAxis, rightProductAxis)), mLeftProductAxis(leftProductAxis), mRightProductAxis(rightProductAxis)
+    {
         for (long i = 0; i < this->mShape.size(); i++)
         {
             if (i != mLeftProductAxis && i != mRightProductAxis)
@@ -235,7 +243,7 @@ public:
         auto leftTranspose = mLeft->mArray.transpose(mLeftProductAxis, mRightProductAxis);
         auto rightTranspose = mRight->mArray.transpose(mLeftProductAxis, mRightProductAxis);
         mLeft->mGradient += Array<T>::matmul(this->mGradient, rightTranspose, mLeftProductAxis, mRightProductAxis).reduceSum(mReductionAxesLeft, true);
-        mRight->mGradient += Array<T>::matmul(leftTranspose, this->mGradient, mLeftProductAxis, mRightProductAxis).reduceSum(mReductionAxesRight, true);;
+        mRight->mGradient += Array<T>::matmul(leftTranspose, this->mGradient, mLeftProductAxis, mRightProductAxis).reduceSum(mReductionAxesRight, true);
     }
 
     void calculate() override
@@ -290,9 +298,7 @@ public:
     void pullGradient() override
     {
         this->mLeft->mGradient += this->mGradient.reduceSum(this->mReductionAxesLeft, true);
-        ;
         this->mRight->mGradient -= this->mGradient.reduceSum(this->mReductionAxesRight, true);
-        ;
     }
 
     void calculate() override
@@ -331,8 +337,8 @@ public:
     void pullGradient() override
     {
         this->mLeft->mGradient += (this->mGradient / this->mRight->mArray).reduceSum(this->mReductionAxesLeft, true);
-        ;
-        this->mRight->mGradient -= (this->mGradient * this->mLeft->mArray / this->mRight->mArray.pow(2)).reduceSum(this->mReductionAxesRight, true);
+
+        this->mRight->mGradient -= (this->mGradient * this->mLeft->mArray / this->mRight->mArray.intPow(2)).reduceSum(this->mReductionAxesRight, true);
     }
 
     void calculate() override
@@ -347,7 +353,7 @@ class Scale : public Unit<T>
 {
 private:
     Unit<T> *mSource;
-    T mScalar;
+    const T mScalar;
 
 public:
     Scale<T>(Unit<T> *source, T scalar) : Unit<T>(source->mDiffTape, source->refShape())
@@ -373,7 +379,7 @@ class Translate : public Unit<T>
 {
 private:
     Unit<T> *mSource;
-    T mTranslate;
+    const T mTranslate;
 
 public:
     Translate<T>(Unit<T> *source, T translate) : Unit<T>(source->mDiffTape, source->refShape())
@@ -384,7 +390,7 @@ public:
 
     void pullGradient() override
     {
-        mSource->mGradient += this->mGradient + mTranslate;
+        mSource->mGradient += this->mGradient;
     }
 
     void calculate() override
@@ -394,28 +400,81 @@ public:
     };
 };
 
-template <typename T>
+template <typename T, T (*f)(T), T (*df)(T)>
 class Elementwise : public Unit<T>
 {
 private:
     Unit<T> *mSource;
-    const std::function<T(T, T)> mF;
-    const std::function<T(T, T)> mdF;
 
 public:
-    Elementwise<T>(Unit<T> *source, std::function<T(T, T)> f, std::function<T(T, T)> dF) : Unit<T>(source->mDiffTape, source->refShape()), mSource(source), mF(f), mdF(dF) {}
+    Elementwise(Unit<T> *source) : Unit<T>(source->getDiffTape(), source->refShape()), mSource(source) {}
 
     void pullGradient() override
     {
-        mSource->mGradient += this->mGradient + Array<T>::applyFunction(mSource->mArray, mdF)*this->mGradient;
+        mSource->mGradient += Array<T>::template unaryCompute<T, df>(mSource->mArray) * this->mGradient;
     }
 
     void calculate() override
     {
-        this->mArray = mSource->mArray + Array<T>::applyFunction(mSource->mArray, mF);
+        this->mArray = Array<T>::template unaryCompute<T, f>(mSource->mArray);
         Unit<T>::calculate();
     };
 };
+
+template <typename T, typename P, T (*f)(T, P), T (*df)(T, P)>
+class ParamElementwise : public Unit<T>
+{
+private:
+    Unit<T> *mSource;
+    const P mParam;
+
+public:
+    ParamElementwise(Unit<T> *source, P param) : Unit<T>(source->getDiffTape(), source->refShape()), mSource(source), mParam(param) {}
+
+    void pullGradient() override
+    {
+        mSource->mGradient += Array<T>::template unaryParamCompute<T, P, df>(mSource->mArray, mParam) * this->mGradient;
+    }
+
+    void calculate() override
+    {
+        this->mArray = Array<T>::template unaryParamCompute<T, P, f>(mSource->mArray, mParam);
+        Unit<T>::calculate();
+    };
+};
+
+template <typename T>
+inline T leakyReLUPtws(T value, T alpha)
+{
+    return value > 0 ? value : value * alpha;
+}
+
+template <typename T>
+inline T dleakyReLUPtws(T value, T alpha) //__attribute__((always_inline))
+{
+    return value > 0 ? 1 : alpha;
+}
+
+template <typename T>
+Unit<T> &leakyReLu(Unit<T> &source, T alpha)
+{
+    return *(new ParamElementwise<T, T, leakyReLUPtws<T>, dleakyReLUPtws<T>>(&source, alpha));
+}
+
+template <typename T>
+T exp(T value)
+{
+    return std::exp(value);
+}
+
+template <typename T>
+Quotient<T> &softmax(Unit<T> &source)
+{
+    // static double (*exp)(double) = static_cast<double (*)(double)>(std::exp);
+    auto &expd = *(new Elementwise<T, exp<T>, exp<T>>(&source));
+    auto &norm = *(new ReduceSum<T>(&expd, {-1}, true));
+    return expd / norm;
+}
 
 template <typename T>
 Sum<T> &operator+(Unit<T> &lhs, Unit<T> &rhs)
@@ -488,4 +547,5 @@ MatrixProduct<T> &matmul(Unit<T> &left, Unit<T> &right, long leftProductAxis = -
 {
     return *(new MatrixProduct<T>(&left, &right, leftProductAxis, rightProductAxis));
 }
+
 #endif

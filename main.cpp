@@ -27,30 +27,30 @@ int main()
 {
     RandomArrayGenerator randomArrayGenerator(0);
     auto mnist = Loader::loadMNIST(10);
-    Array<double> images(mnist.data.reshape({-1, 28, 28}));
+    Array<double> images(mnist.data.reshape({-1, 784}));
     Array<int> labels(mnist.label.reshape({-1}));
-    images /= 255;
-    auto image0 = images.take({0},false);
-    std::cout << image0 << std::endl;
-    auto max = image0.reduceMax({0}, true);
-    std::cout << max << std::endl;
-    //auto argmax = (image0 == max).findNonZero();
-    //std::cout << argmax << std::endl;
+    auto onehot = labels.oneHot<double>();
 
-    /*auto diffTape = DiffTape<double>(true);
-    auto& x = *(new Coefficients<double>(diffTape, randomArrayGenerator.uniformInteger<double>({1,3,3}, 0, 3)));
-    auto& y = *(new Coefficients<double>(diffTape,  Array<double>::range(900).reshape({100,3,3})));
+    auto s1 = images.slice({0,0},{3,-1});
+    auto s2 = images.slice({3,0},{6,-1});
+    std::cout << s1.refShape() << std::endl;
+    std::cout << s2.refShape() << std::endl;
+    auto s3 = s1 + s2;
+    std::cout << s3.refShape() << std::endl;
 
-    auto& u = matmul(x,y);
-    auto& z = reduceSum(u);
+    // auto argmax = (image0 == max).findNonZero();
+    // std::cout << argmax << std::endl;
+
+    auto diffTape = DiffTape<double>();
+    auto &x = *(new Coefficients<double>(diffTape, Array<double>::range(2)));
+
+    auto &z = leakyReLu(x, 0.1); 
 
     auto a = diffTape.getGradient(x, z);
-    auto b = diffTape.getGradient(y, z);
 
-    std::cout << x << std::endl;
-    std::cout << y << std::endl;
-    std::cout << u << std::endl;
-    std::cout << z << std::endl;
-    std::cout << a << std::endl;
-    std::cout << b << std::endl;*/
+    for (int i = 0; i < diffTape.mUnits.size(); i++)
+        std::cout << diffTape.mUnits[i]->mArray << std::endl;
+
+    for (int i = 0; i < diffTape.mUnits.size(); i++)
+        std::cout << diffTape.mUnits[i]->mGradient << std::endl;
 }

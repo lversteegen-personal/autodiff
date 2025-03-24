@@ -26,10 +26,10 @@
 #define MAX_DIM 8ul
 typedef StackBuffer<long, MAX_DIM> Coordinates;
 
-template <typename T>
+template <DataType T>
 class Array
 {
-    template <typename U>
+    template <DataType U>
     friend class Array;
 
     static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
@@ -75,6 +75,13 @@ public:
     Array<T>(const Array<T> &other) : mData(other.mData),
                                       mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(other.mStrides), mDim(other.mDim), mOffset(other.mOffset), transposed(other.transposed)
     {
+    }
+
+    template <DataType U> 
+    Array<T>(const Array<U> &other) requires std::is_convertible_v<U,T> : mData(other.mFlatLength),
+                                      mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(calculateStrides(other.mShape)), mDim(other.mDim), mOffset(0)
+    {
+        Array<U>::template destUnary<T, convert<U>>(*this, other);
     }
 
     Array<T>(Array<T> &&other) = default;
@@ -186,6 +193,8 @@ public:
                     break;
             }
         }
+
+        return *this;
     }
 
     static Coordinates calculateStrides(const Coordinates &shape)
@@ -347,10 +356,82 @@ public:
         return destUnary<copy>(result, *this);
     }
 
+    template <typename U>
+    Array<U> oneHot() const
+    {
+        static_assert(std::is_integral<T>(), "T of Array<T> must be an integer.");
+        return oneHot<U>(Array<T>::range(reduceMin().get(0), reduceMax().get(0) + 1));
+    }
+
+    template <typename U>
+    Array<U> oneHot(T from, T to) const
+    {
+        return oneHot<U>(Array<T>::range(from, to));
+    }
+
+    template <typename U>
+    Array<U> oneHot(Array<T> valueRange) const
+    {
+        return Array<U>(reshape(mShape + 1) == valueRange.reshape(valueRange.mShape.rightShift(1, mDim)));
+    }
+
 private:
     static inline T copy(T s) { return s; }
 
-    template <typename U, T (*f)(T)>
+    template <typename U>
+    static inline T convert(U s)
+    {
+        static_assert(std::is_arithmetic<U>(), "U of convert<U> has to be arithmetic datatype.");
+        return s;
+    }
+
+    template <typename U, typename P, U (*f)(T, P)>
+    static Array<U> &destParamUnary(Array<U> &dest, const Array<T> &source, P param)
+    {
+        assertm(isSubshape(source.mShape, dest.mShape), "Source array is not a subshape of the destination array.");
+
+        if (dest.mDim == 0)
+        {
+            dest.mData[dest.mOffset] = f(source.mData[source.mOffset],param);
+            return dest;
+        }
+
+        U *pDestData = dest.mData.mRaw + dest.mOffset;
+        T *pSourceData = source.mData.mRaw + source.mOffset;
+
+        Coordinates c(dest.mDim, 0);
+
+        while (c[0] < dest.mShape[0])
+        {
+            *pDestData = f(*pSourceData, param);
+
+            for (long i = dest.mDim - 1; i >= 0; i--)
+            {
+                c[i]++;
+
+                if (dest.mShape[i] == 1)
+                    ;
+                else if (c[i] % dest.mShape[i] == 0)
+                    pDestData -= dest.mStrides[i] * (dest.mShape[i] - 1);
+                else
+                    pDestData += dest.mStrides[i];
+
+                if (source.mShape[i] == 1)
+                    ;
+                else if (c[i] % source.mShape[i] == 0)
+                    pSourceData -= source.mStrides[i] * (source.mShape[i] - 1);
+                else
+                    pSourceData += source.mStrides[i];
+
+                if (c[i] % dest.mShape[i] != 0)
+                    break;
+            }
+        }
+
+        return dest;
+    }
+
+    template <typename U, U (*f)(T)>
     static Array<U> &destUnary(Array<U> &dest, const Array<T> &source)
     {
         assertm(isSubshape(source.mShape, dest.mShape), "Source array is not a subshape of the destination array.");
@@ -401,8 +482,10 @@ private:
     static inline T subtract(T a, T b) { return a - b; }
     static inline T divide(T a, T b) { return a / b; }
     static inline T modulo(T a, T b) { return a % b; }
-    static inline T max (T a, T b) { return a > b ? a : b; }
-    static inline T min (T a, T b) { return a < b ? a : b; }
+    template <typename U>
+    static inline U power(T a, T b) { return (U)std::pow(a, b); }
+    static inline T max(T a, T b) { return a > b ? a : b; }
+    static inline T min(T a, T b) { return a < b ? a : b; }
     static inline T logical_and(T a, T b) { return a && b; }
     static inline T logical_or(T a, T b) { return a || b; }
 
@@ -476,7 +559,7 @@ private:
     template <typename U, U (*f)(const U, const T)>
     Array<U> reduce(const U &initial, const Coordinates &axes, bool keepDims = false) const
     {
-        if (mDim == 0)
+        if (mDim == 0 || axes.size() == 0)
             return copy();
 
         bool reduce[MAX_DIM] = {false};
@@ -522,7 +605,7 @@ private:
 
         while (c[0] < mShape[0])
         {
-           *pDestData = f(*pDestData, *pSourceData);
+            *pDestData = f(*pDestData, *pSourceData);
 
             for (long i = mDim - 1; i >= 0; i--)
             {
@@ -551,10 +634,52 @@ private:
     }
 
 public:
-    template <T (*f)(T, T)>
+    static Coordinates reducedShape(const Coordinates &shape, const Coordinates &reduceAxes, bool keepDims = false)
+    {
+        size_t dim = shape.size();
+        if (dim == 0)
+            return Coordinates(0);
+
+        bool reduce[MAX_DIM] = {false};
+        long j = 0;
+        for (int i = 0; i < reduceAxes.size(); i++)
+        {
+            j = reduceAxes[i] % dim;
+            j = j < 0 ? dim + j : j;
+            reduce[j] = true;
+        }
+
+        int newDim;
+        if (keepDims)
+            newDim = dim;
+        else
+            newDim = dim - reduceAxes.size();
+
+        Coordinates newShape(newDim);
+        j = newDim - 1;
+        long flatLength = 1;
+
+        for (int i = dim - 1; i >= 0; i--)
+        {
+            if (!reduce[i])
+                newShape[j--] = shape[i];
+            else if (keepDims)
+                newShape[j--] = 1;
+        }
+
+        return newShape;
+    }
+
+    template <T (*f)(T)>
     Array<T> &unaryApply()
     {
         return destUnary<T, f>(*this, *this);
+    }
+
+    template <typename P, T (*f)(T, P)>
+    Array<T> &unaryParamApply(P param)
+    {
+        return destParamUnary<T, P, f>(*this, *this, param);
     }
 
     template <typename U, U (*f)(T)>
@@ -562,6 +687,13 @@ public:
     {
         auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
         return destUnary<U, f>(result, source);
+    }
+
+    template <typename U, typename P, U (*f)(T,P)>
+    static Array<U> unaryParamCompute(const Array<T> &source, P param)
+    {
+        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
+        return destParamUnary<U, P, f>(result, source, param);
     }
 
     template <T (*f)(T, T)>
@@ -751,7 +883,7 @@ public:
 
     Array<T> operator-(const Array<T> &other) const
     {
-        return binaryCombine<T, subtract>(other);
+        return binaryCombine<T, subtract>(*this, other);
     }
 
     Array<T> &operator-=(const T other)
@@ -777,7 +909,7 @@ public:
 
     Array<T> operator/(const Array<T> &other) const
     {
-        return binaryCombine<T, divide>(other);
+        return binaryCombine<T, divide>(*this, other);
     }
 
     Array<T> &operator/=(const T other)
@@ -989,43 +1121,30 @@ public:
         return findWhere<find_isNonZero>();
     }
 
-    Array<T> pow(const unsigned int k) const
+    Array<T> square() const
+    {
+        return (*this) * (*this);
+    }
+
+    Array<T> intPow(const unsigned int k) const
     {
         if (k > 4)
             return this->pow((double)k);
 
-        auto resultData = Data<T>(mData);
+        auto resultData = Data<T>(mFlatLength);
+        resultData = 1;
 
         for (size_t i = 0; i < getFlatLength(); i++)
             for (size_t j = 0; j < k; j++)
                 resultData[i] *= mData[i];
 
-        auto result = Array<T>(resultData, mShape);
-
-        return result;
-    }
-
-    Array<T> pow(double y) const
-    {
-        auto resultData = Data<T>(mFlatLength);
-
-        for (size_t i = 0; i < getFlatLength(); i++)
-            resultData[i] = (T)std::pow(mData[i], y);
-
-        auto result = Array<T>(resultData, mShape);
-
-        return result;
+        return Array<T>(resultData, mShape);
     }
 
 public:
-    Array<T> pow(const Array<T> &y) const
+    Array<T> pow(const Array<T> &other) const
     {
-        auto resultData = Data<T>(getFlatLength());
-
-        for (size_t i = 0; i < getFlatLength(); i++)
-            resultData[i] = (T)std::pow(mData[i], y.mData[i]);
-
-        return Array<T>(resultData, mShape);
+        return binaryCombine<T, power<T>>(*this, other);
     }
 
     Array<T> reduceSum(const Coordinates &axes, bool keepDims = false) const
@@ -1034,10 +1153,10 @@ public:
             throw std::invalid_argument("Too many axes for array dimension.");
 
         for (int i = 0; i < axes.size(); i++)
-            if (axes[i] < 0 || axes[i] >= mDim)
+            if (axes[i] < -mDim || axes[i] >= mDim)
                 throw std::invalid_argument("Axis out of bounds.");
 
-        return reduce<T,add>(0,axes, keepDims);
+        return reduce<T, add>(0, axes, keepDims);
     }
 
     Array<T> reduceSum() const
@@ -1046,7 +1165,7 @@ public:
         for (int i = 0; i < mDim; i++)
             axes[i] = i;
 
-        return reduce<T,add>(0,axes);
+        return reduce<T, add>(0, axes);
     }
 
     Array<T> reduceProduct(const Coordinates &axes, bool keepDims = false) const
@@ -1055,10 +1174,10 @@ public:
             throw std::invalid_argument("Too many axes for array dimension.");
 
         for (int i = 0; i < axes.size(); i++)
-            if (axes[i] < 0 || axes[i] >= mDim)
+            if (axes[i] < -mDim || axes[i] >= mDim)
                 throw std::invalid_argument("Axis out of bounds.");
 
-        return reduce<T,multiply>(1,axes, keepDims);
+        return reduce<T, multiply>(1, axes, keepDims);
     }
 
     Array<T> reduceProduct() const
@@ -1067,7 +1186,7 @@ public:
         for (int i = 0; i < mDim; i++)
             axes[i] = i;
 
-        return reduce<T,multiply>(1,axes);
+        return reduce<T, multiply>(1, axes);
     }
 
     Array<T> reduceMax(const Coordinates &axes, bool keepDims = false) const
@@ -1076,10 +1195,10 @@ public:
             throw std::invalid_argument("Too many axes for array dimension.");
 
         for (int i = 0; i < axes.size(); i++)
-            if (axes[i] < 0 || axes[i] >= mDim)
+            if (axes[i] < -mDim || axes[i] >= mDim)
                 throw std::invalid_argument("Axis out of bounds.");
 
-        return reduce<T,max>(std::numeric_limits<T>::lowest(),axes, keepDims);
+        return reduce<T, max>(std::numeric_limits<T>::lowest(), axes, keepDims);
     }
 
     Array<T> reduceMax() const
@@ -1088,7 +1207,7 @@ public:
         for (int i = 0; i < mDim; i++)
             axes[i] = i;
 
-        return reduce<T,max>(std::numeric_limits<T>::lowest(),axes);
+        return reduce<T, max>(std::numeric_limits<T>::lowest(), axes);
     }
 
     Array<T> reduceMin(const Coordinates &axes, bool keepDims = false) const
@@ -1097,10 +1216,10 @@ public:
             throw std::invalid_argument("Too many axes for array dimension.");
 
         for (int i = 0; i < axes.size(); i++)
-            if (axes[i] < 0 || axes[i] >= mDim)
+            if (axes[i] < -mDim || axes[i] >= mDim)
                 throw std::invalid_argument("Axis out of bounds.");
 
-        return reduce<T,min>(std::numeric_limits<T>::max(),axes, keepDims);
+        return reduce<T, min>(std::numeric_limits<T>::max(), axes, keepDims);
     }
 
     Array<T> reduceMin() const
@@ -1109,10 +1228,10 @@ public:
         for (int i = 0; i < mDim; i++)
             axes[i] = i;
 
-        return reduce<T,min>(std::numeric_limits<T>::max(),axes);
+        return reduce<T, min>(std::numeric_limits<T>::max(), axes);
     }
 
-    Array<T> take(Coordinates at, bool keepDims = false)
+    Array<T> take(Coordinates at, bool keepDims = false) const
     {
         Coordinates to(at.size());
         for (int i = 0; i < at.size(); i++)
@@ -1121,11 +1240,11 @@ public:
         return slice(at, to, keepDims);
     }
 
-    Array<T> slice(Coordinates &from, Coordinates &to, bool keepDims = false)
+    Array<T> slice(Coordinates from, Coordinates upto, bool keepDims = false) const
     {
-        if (from.size() > mDim || to.size() > mDim)
+        if (from.size() > mDim || upto.size() > mDim)
             throw std::invalid_argument("The index tuples cannot be longer than the array dimension.");
-        if (from.size() != to.size())
+        if (from.size() != upto.size())
             throw std::invalid_argument("The index tuples must have the same length.");
 
         Coordinates newShape(0);
@@ -1138,23 +1257,23 @@ public:
             if (i < from.size())
             {
                 from[i] = from[i] % mShape[i];
-                to[i] = to[i] % mShape[i];
+                upto[i] = upto[i] % mShape[i];
 
                 if (from[i] < 0)
                     from[i] += mShape[i];
-                if (to[i] < 0)
-                    to[i] += mShape[i];
+                if (upto[i] < 0)
+                    upto[i] += mShape[i];
 
-                if (from[i] > to[i])
+                if (from[i] > upto[i])
                     throw std::invalid_argument("To cannot be smaller than from mod shape.");
 
                 offset += from[i] * mStrides[i];
 
-                if (from[i] != to[i])
+                if (from[i] != upto[i])
                 {
-                    newShape.pushBack(to[i] - from[i] + 1);
+                    newShape.pushBack(upto[i] - from[i]);
                     newStrides.pushBack(mStrides[i]);
-                    flatlength *= to[i] - from[i] + 1;
+                    flatlength *= upto[i] - from[i];
                 }
                 else if (keepDims)
                 {
@@ -1180,7 +1299,7 @@ public:
 
     T &get(const Coordinates indices) const
     {
-        if (indices.size() = mDim)
+        if (indices.size() == mDim)
             throw std::invalid_argument("The index tuple does not match the array shape");
         size_t combinedIndex = 0;
         long ix;
@@ -1196,7 +1315,7 @@ public:
         return mData[combinedIndex];
     }
 
-    T &getFlat(size_t i) const
+    T &get(size_t i) const
     {
         size_t k = 0;
         for (long j = mDim - 1; j >= 0; j--)
@@ -1255,7 +1374,7 @@ std::ostream &operator<<(std::ostream &s, const Array<T> &x)
     return s << x.to_string();
 }
 
-template <typename INT, typename T>
+/*template <typename INT, typename T>
 Array<T> operator+(const INT single, const Array<T> &array)
 {
     static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
@@ -1285,6 +1404,6 @@ Array<T> operator/(const INT single, const Array<T> &array)
     static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
     static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
     return array / single;
-}
+}*/
 
 #endif
