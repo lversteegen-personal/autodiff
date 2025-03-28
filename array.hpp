@@ -40,6 +40,8 @@ public:
         long flatLength = 1;
         for (long i = 0; i < shape.size(); i++)
         {
+            if (shape[i] < 0)
+                throw std::invalid_argument("Entries of absolute shape vector cannot be negative.");
             flatLength *= shape[i];
         }
         return flatLength;
@@ -60,10 +62,10 @@ private:
     bool transposed = false;
 
 private:
-    int mDim;
+    long mDim;
 
 public:
-    int getDim() const { return mDim; }
+    long getDim() const { return mDim; }
 
 public:
     const Coordinates &refShape() const { return mShape; }
@@ -77,9 +79,11 @@ public:
     {
     }
 
-    template <DataType U> 
-    Array<T>(const Array<U> &other) requires std::is_convertible_v<U,T> : mData(other.mFlatLength),
-                                      mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(calculateStrides(other.mShape)), mDim(other.mDim), mOffset(0)
+    template <DataType U>
+    Array<T>(const Array<U> &other)
+        requires std::is_convertible_v<U, T>
+        : mData(other.mFlatLength),
+          mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(calculateStrides(other.mShape)), mDim(other.mDim), mOffset(0)
     {
         Array<U>::template destUnary<T, convert<U>>(*this, other);
     }
@@ -92,7 +96,7 @@ private:
     }
 
 public:
-    Array<T>(T single) : mData(Data<T>(1)), mFlatLength(1), mShape(0), mStrides(0), mDim(0)
+    Array<T>(const T &single) : mData(Data<T>(1)), mFlatLength(1), mShape(0), mStrides(0), mDim(0)
     {
         mData[0] = single;
     }
@@ -140,26 +144,26 @@ public:
             throw std::logic_error("Cannot reshape a transposed array.");
 
         long flatLength = 1;
-        long slackDimension = -1;
+        long wildcardDimension = -1;
         for (size_t i = 0; i < shape.size(); i++)
         {
             if (shape[i] == -1)
             {
-                if (slackDimension != -1)
+                if (wildcardDimension != -1)
                     throw std::invalid_argument("Only one dimension can be -1.");
-                slackDimension = i;
+                wildcardDimension = i;
             }
             else
                 flatLength *= shape[i];
         }
-        if (slackDimension == -1 && flatLength == mFlatLength)
+        if (wildcardDimension == -1 && flatLength == mFlatLength)
         {
             return Array<T>(mData, shape);
         }
-        else if (slackDimension != -1 && flatLength <= mFlatLength && mFlatLength % flatLength == 0)
+        else if (wildcardDimension != -1 && flatLength <= mFlatLength && mFlatLength % flatLength == 0)
         {
             Coordinates newShape(shape);
-            newShape[slackDimension] = mFlatLength / flatLength;
+            newShape[wildcardDimension] = mFlatLength / flatLength;
             return Array<T>(mData, newShape);
         }
         else
@@ -173,6 +177,12 @@ public:
     Array<T> &operator=(const T value)
     {
         T *pData = mData.mRaw + mOffset;
+
+        if (mDim == 0)
+        {
+            *pData = value;
+            return *this;
+        }
 
         Coordinates c(mDim, 0);
 
@@ -201,10 +211,13 @@ public:
     {
         int dim = shape.size();
         Coordinates strides(dim);
-        size_t multiplier = 1;
+        long multiplier = 1;
 
         for (size_t i = 0; i < dim; i++)
         {
+            if (shape[i] < 0)
+                throw std::invalid_argument("Entries of absolute shape vector cannot be negative.");
+
             if (shape[dim - i - 1] == 1)
                 strides[dim - i - 1] = 0;
             else
@@ -220,7 +233,7 @@ public:
 private:
     void calculateStrides()
     {
-        size_t multiplier = 1;
+        long multiplier = 1;
         for (size_t i = 0; i < mDim; i++)
         {
             mStrides[mDim - i - 1] = multiplier;
@@ -327,6 +340,8 @@ public:
         size_t flatLength = 1;
         for (size_t i = 0; i < shape.size(); i++)
         {
+            if (shape[i] < 0)
+                throw std::invalid_argument("Entries of absolute shape vector cannot be negative.");
             flatLength *= shape[i];
         }
         auto data = Data<T>(flatLength);
@@ -392,7 +407,7 @@ private:
 
         if (dest.mDim == 0)
         {
-            dest.mData[dest.mOffset] = f(source.mData[source.mOffset],param);
+            dest.mData[dest.mOffset] = f(source.mData[source.mOffset], param);
             return dest;
         }
 
@@ -482,10 +497,10 @@ private:
     static inline T subtract(T a, T b) { return a - b; }
     static inline T divide(T a, T b) { return a / b; }
     static inline T modulo(T a, T b) { return a % b; }
-    template <typename U>
-    static inline U power(T a, T b) { return (U)std::pow(a, b); }
     static inline T max(T a, T b) { return a > b ? a : b; }
     static inline T min(T a, T b) { return a < b ? a : b; }
+    static inline bool any(bool a, T b) { return a || (b != 0); }
+    static inline bool all(bool a, T b) { return a && (b != 0); }
     static inline T logical_and(T a, T b) { return a && b; }
     static inline T logical_or(T a, T b) { return a || b; }
 
@@ -496,6 +511,12 @@ private:
     static inline bool greater(T a, T b) { return a > b; }
     static inline bool greaterEqual(T a, T b) { return a >= b; }
 
+public:
+    template <typename U>
+    static inline U pow_ptw(T a, T b) { return (U)std::pow(a, b); }
+    static inline T exp_ptw(T a) { return std::exp(a); }
+
+private:
     template <typename U, U (*f)(T, T)>
     static Array<U> &binaryDestCombine(Array<U> &dest, const Array<T> &left, const Array<T> &right)
     {
@@ -559,8 +580,8 @@ private:
     template <typename U, U (*f)(const U, const T)>
     Array<U> reduce(const U &initial, const Coordinates &axes, bool keepDims = false) const
     {
-        if (mDim == 0 || axes.size() == 0)
-            return copy();
+        if (mDim == 0)
+            return f(initial, *(mData.mRaw + mOffset));
 
         bool reduce[MAX_DIM] = {false};
         long j = 0;
@@ -636,7 +657,7 @@ private:
 public:
     static Coordinates reducedShape(const Coordinates &shape, const Coordinates &reduceAxes, bool keepDims = false)
     {
-        size_t dim = shape.size();
+        long dim = shape.size();
         if (dim == 0)
             return Coordinates(0);
 
@@ -689,7 +710,7 @@ public:
         return destUnary<U, f>(result, source);
     }
 
-    template <typename U, typename P, U (*f)(T,P)>
+    template <typename U, typename P, U (*f)(T, P)>
     static Array<U> unaryParamCompute(const Array<T> &source, P param)
     {
         auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
@@ -734,6 +755,8 @@ public:
                 result[i] = shape2[i];
             else if (i < offset2)
                 result[i] = shape1[i];
+            else if (shape1[i] == -1 || shape2[i] == -1)
+                throw std::invalid_argument("There can be at most one wildcard dimension between the two shapes.");
             else
                 result[i] = std::max(shape1[i + offset1], shape2[i + offset2]);
         }
@@ -886,20 +909,14 @@ public:
         return binaryCombine<T, subtract>(*this, other);
     }
 
-    Array<T> &operator-=(const T other)
+    Array<T> &operator-=(const T &other)
     {
-        for (size_t i = 0; i < getFlatLength(); i++)
-            mData[i] -= other;
-
-        return *this;
+        return *this -= Array<T>(other);
     }
 
-    Array<T> operator-(const T other) const
+    Array<T> operator-(const T &other) const
     {
-        auto result = copy();
-        result -= other;
-
-        return result;
+        return *this - Array<T>(other);
     }
 
     Array<T> &operator/=(const Array<T> &other)
@@ -1083,6 +1100,12 @@ private:
     static inline bool find_isNonZero(T a) { return a != 0; }
 
 public:
+    Array<bool> isNaN() const
+    {
+        static_assert(std::is_floating_point_v<T>, "Only floating points can be NaN.");
+        return unaryCompute<bool, std::isnan>(*this);
+    }
+
     template <bool (*f)(T)>
     Array<long> findWhere() const
     {
@@ -1144,7 +1167,12 @@ public:
 public:
     Array<T> pow(const Array<T> &other) const
     {
-        return binaryCombine<T, power<T>>(*this, other);
+        return binaryCombine<T, pow_ptw<T>>(*this, other);
+    }
+
+    Array<T> exp() const
+    {
+        return unaryCompute<T, exp_ptw>(*this);
     }
 
     Array<T> reduceSum(const Coordinates &axes, bool keepDims = false) const
@@ -1229,6 +1257,48 @@ public:
             axes[i] = i;
 
         return reduce<T, min>(std::numeric_limits<T>::max(), axes);
+    }
+
+    Array<bool> reduceAny(const Coordinates &axes, bool keepDims = false) const
+    {
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
+        for (int i = 0; i < axes.size(); i++)
+            if (axes[i] < -mDim || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
+
+        return reduce<bool, any>(false, axes, keepDims);
+    }
+
+    Array<bool> reduceAny() const
+    {
+        Coordinates axes(mDim);
+        for (int i = 0; i < mDim; i++)
+            axes[i] = i;
+
+        return reduce<bool, any>(false, axes);
+    }
+
+    Array<bool> reduceAll(const Coordinates &axes, bool keepDims = false) const
+    {
+        if (axes.size() > mDim)
+            throw std::invalid_argument("Too many axes for array dimension.");
+
+        for (int i = 0; i < axes.size(); i++)
+            if (axes[i] < -mDim || axes[i] >= mDim)
+                throw std::invalid_argument("Axis out of bounds.");
+
+        return reduce<bool, all>(true, axes, keepDims);
+    }
+
+    Array<bool> reduceAll() const
+    {
+        Coordinates axes(mDim);
+        for (int i = 0; i < mDim; i++)
+            axes[i] = i;
+
+        return reduce<bool, all>(true, axes);
     }
 
     Array<T> take(Coordinates at, bool keepDims = false) const
@@ -1374,36 +1444,66 @@ std::ostream &operator<<(std::ostream &s, const Array<T> &x)
     return s << x.to_string();
 }
 
-/*template <typename INT, typename T>
-Array<T> operator+(const INT single, const Array<T> &array)
+template <DataType T>
+Array<T> operator+(const T &left, const Array<T> &right)
 {
-    static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
-    static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
-    return array + single;
+    return Array<T>(left) + right;
 }
 
-template <typename INT, typename T>
-Array<T> operator*(const INT single, const Array<T> &array)
+template <DataType T>
+Array<T> operator+(const Array<T> &left, const T &right)
 {
-    static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
-    static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
-    return array * single;
+    return left + Array<T>(right);
 }
 
-template <typename INT, typename T>
-Array<T> operator-(const INT single, const Array<T> &array)
+template <DataType T>
+Array<T> operator-(const T &left, const Array<T> &right)
 {
-    static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
-    static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
-    return array - single;
+    return Array<T>(left) - right;
 }
 
-template <typename INT, typename T>
-Array<T> operator/(const INT single, const Array<T> &array)
+template <DataType T>
+Array<T> operator-(const Array<T> &left, const T &right)
 {
-    static_assert(std::is_arithmetic_v<INT>, "INT must be arithmetic type!");
-    static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
-    return array / single;
-}*/
+    return left - Array<T>(right);
+}
+
+template <DataType T>
+Array<T> operator*(const T &left, const Array<T> &right)
+{
+    return Array<T>(left) * right;
+}
+
+template <DataType T>
+Array<T> operator*(const Array<T> &left, const T &right)
+{
+    return left * Array<T>(right);
+}
+
+template <DataType T>
+Array<T> operator/(const T &left, const Array<T> &right)
+{
+    return Array<T>(left) / right;
+}
+
+template <DataType T>
+Array<T> operator/(const Array<T> &left, const T &right)
+{
+    return left / Array<T>(right);
+}
+
+template <DataType T>
+    requires std::is_integral_v<T>
+Array<T> operator%(const T &left, const Array<T> &right)
+{
+    return Array<T>(left) % right;
+}
+
+template <DataType T>
+    requires std::is_integral_v<T>
+Array<T> operator%(const Array<T> &left, const T &right)
+{
+    return left % Array<T>(right);
+}
 
 #endif

@@ -26,31 +26,34 @@ std::ostream &operator<<(std::ostream &s, const std::vector<T> &v)
 int main()
 {
     RandomArrayGenerator randomArrayGenerator(0);
-    auto mnist = Loader::loadMNIST(10);
+    auto mnist = Loader::loadMNIST(20);
     Array<double> images(mnist.data.reshape({-1, 784}));
     Array<int> labels(mnist.label.reshape({-1}));
     auto onehot = labels.oneHot<double>();
 
-    auto s1 = images.slice({0,0},{3,-1});
-    auto s2 = images.slice({3,0},{6,-1});
-    std::cout << s1.refShape() << std::endl;
-    std::cout << s2.refShape() << std::endl;
-    auto s3 = s1 + s2;
-    std::cout << s3.refShape() << std::endl;
-
-    // auto argmax = (image0 == max).findNonZero();
-    // std::cout << argmax << std::endl;
+    auto layer1Weights = randomArrayGenerator.normal({1, 10, 784});
+    auto layer1Bias = randomArrayGenerator.normal({1, 10});
 
     auto diffTape = DiffTape<double>();
-    auto &x = *(new Coefficients<double>(diffTape, Array<double>::range(2)));
+    auto &input = *(new Coefficients<double>(diffTape, images.reshape({-1, 784, 1}) / 255));
+    auto &labelsD = *(new Coefficients<double>(diffTape, onehot.reshape({-1, 10})));
+    auto &layer1WeightsD = *(new Coefficients<double>(diffTape, layer1Weights));
+    auto &layer1BiasD = *(new Coefficients<double>(diffTape, layer1Bias));
 
-    auto &z = leakyReLu(x, 0.1); 
+    auto &layer1 = matmul(layer1WeightsD, input).reshape({-1, 10}) + layer1BiasD; // leakyReLu(,0.1);
+    auto &sftm = layer1.softmax({-1});
+    auto &dist = sftm - labelsD;
+    auto &cost = (dist * dist).reduceSum();
 
-    auto a = diffTape.getGradient(x, z);
+    auto dlayer1Bias = diffTape.getGradient(layer1BiasD, cost);
 
     for (int i = 0; i < diffTape.mUnits.size(); i++)
-        std::cout << diffTape.mUnits[i]->mArray << std::endl;
-
-    for (int i = 0; i < diffTape.mUnits.size(); i++)
-        std::cout << diffTape.mUnits[i]->mGradient << std::endl;
+    {
+        std::cout << typeid(*(diffTape.mUnits[i])).name() << std::endl;
+        std::cout << diffTape.mUnits[i]->refArrayShape() << std::endl;
+        std::cout << diffTape.mUnits[i]->refArray().reduceMax() << std::endl;
+        std::cout << diffTape.mUnits[i]->refArray().reduceMin() << std::endl;
+        std::cout << diffTape.mUnits[i]->mGradient.reduceMax() << std::endl;
+        std::cout << diffTape.mUnits[i]->mGradient.reduceMin() << std::endl;
+    }
 }
