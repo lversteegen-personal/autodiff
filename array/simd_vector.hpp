@@ -52,7 +52,7 @@ namespace ArrayLibrary
 
         static inline SimdVector<T> max(const SimdVector<T> &a, const SimdVector<T> &b);
         static inline SimdVector<T> min(const SimdVector<T> &a, const SimdVector<T> &b);
-        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> bounds);
+        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> &bounds);
 
         static inline SimdVector<T> step(const SimdVector<T> &a, const SimdVector<T> threshold);
     };
@@ -140,7 +140,7 @@ namespace ArrayLibrary
         }
         
         // Clip the values of a to be between least and most
-        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> bounds)
+        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> &bounds)
         {
             return max(bounds.lowerBound, min(bounds.upperBound, a));
         }
@@ -198,7 +198,7 @@ namespace ArrayLibrary
             return MIN(a.mInternal, b.mInternal);
         }
 
-        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> bounds)
+        static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> &bounds)
         {
             return max(bounds.lowerBound, min(bounds.upperBound, a));
         }
