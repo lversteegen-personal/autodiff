@@ -5,23 +5,28 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
-#include "array.hpp"
+#include "array/array_library.hpp"
 
-class Loader {
+using namespace ArrayLibrary;
 
-    struct LabeledData {
-        Array<double> data;
+template <DataType T>
+class Loader
+{
+
+    struct LabeledData
+    {
+        Array<T> data;
         Array<int> label;
+        long getLength() const { return data.refShape()[0]; }
     };
 
-    public:
-
+public:
     static LabeledData loadMNIST(int count = -1)
     {
         return loadMNIST("data/mnist_train.csv", count);
     }
 
-    static LabeledData loadMNIST(std::string fileName, int count=-1)
+    static LabeledData loadMNIST(std::string fileName, int count = -1)
     {
         std::cout << std::filesystem::current_path() << std::endl;
         std::ifstream file(fileName);
@@ -29,7 +34,7 @@ class Loader {
             throw std::invalid_argument("File could not be read.");
         std::string line;
 
-        std::vector<Data<double>> lineData;
+        std::vector<Data<T>> lineData;
         std::vector<Data<int>> lineLabels;
 
         while (!file.eof())
@@ -51,17 +56,22 @@ class Loader {
 
             Data<int> label({std::stoi(tokens[0])});
 
-            Data<double> data(tokens.size() - 1);
-            for (size_t i = 0; i < tokens.size()-1; i++)
+            Data<T> data(tokens.size() - 1);
+            for (size_t i = 0; i < tokens.size() - 1; i++)
             {
-                data[i] = std::stod(tokens[i+1]);
+                if (std::is_same_v < T, double>)
+                    data[i] = std::stof(tokens[i + 1]);
+                else if (std::is_same_v < T,float>)
+                    data[i] = std::stof(tokens[i + 1]);
+                else
+                    throw std::invalid_argument("Template argument for data loader has to be float or double");
             }
 
             lineData.push_back(data);
             lineLabels.push_back(label);
         }
 
-        return LabeledData{Array<double>::fromFlatLines(lineData), Array<int>::fromFlatLines(lineLabels)};
+        return LabeledData{Array<T>::fromFlatLines(lineData), Array<int>::fromFlatLines(lineLabels)};
     }
 };
 
