@@ -94,11 +94,17 @@ namespace ArrayLibrary
         for (long i = 0; i + LENGTH <= axisLength; i += LENGTH)
         {
             if (!leftSkip)
-                left = SimdVector<T>::load(pLeftData++);
+            {
+                left = SimdVector<T>::load(pLeftData);
+                pLeftData += LENGTH;
+            }
             if (!rightSkip)
-                right = SimdVector<T>::load(pRightData++);
-
-            SimdVector<U>::store(pDestData++, fSimd(left, right));
+            {
+                right = SimdVector<T>::load(pRightData);
+                pRightData += LENGTH;
+            }
+            SimdVector<U>::store(pDestData, fSimd(left, right));
+            pDestData += LENGTH;
         }
 
         if (leftover)

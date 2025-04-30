@@ -341,8 +341,9 @@ namespace ArrayLibrary
         template <DataType U, U (*f)(const T)>
         static void baseUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides);
 
+        /// @param param The parameter is NOT passed by reference to allow the compiler to keep it in the register
         template <DataType U, typename P, U (*f)(const T, const P &)>
-        static void baseParamUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const P &param);
+        static void baseParamUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const P param);
 
         template <DataType U, U (*f)(const T)>
         static inline void unaryBoost(const T *pSourceData, U *pDestData, const long length, const long sourceStride, const long destStride);
@@ -353,8 +354,22 @@ namespace ArrayLibrary
         template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &), bool sourceSkip>
         static void simdUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength);
 
+        /// @brief
+        /// @tparam Q The Simd version of the parameter
+        /// @tparam U The scalar type of the output
+        /// @tparam fSimd The Simd function operating on the data
+        /// @tparam sourceSkip Whether the source is broadcasted in the contiguous dimensions of the two arrays
+        /// @param pSourceData
+        /// @param pDestData
+        /// @param sourceShape
+        /// @param destShape
+        /// @param sourceStrides
+        /// @param destStrides
+        /// @param flatBoostDim
+        /// @param flatBoostDimLength
+        /// @param param The parameter is NOT passed by reference to allow the compiler to keep it in the register
         template <DataType U, typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &), bool sourceSkip>
-        static void simdUnaryParam(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength, const Q &param);
+        static void simdUnaryParam(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength, const Q param);
 
         template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &), bool sourceSkip>
         static inline void simdUnaryBoost(const T *pSourceData, U *pDestData, const long axisLength);
@@ -363,7 +378,6 @@ namespace ArrayLibrary
         static inline void simdUnaryParamBoost(const T *pSourceData, U *pDestData, const long axisLength, const Q &param);
 
     public:
-
         static inline T add(const T a, const T b) { return a + b; }
         static inline T multiply(const T a, const T b) { return a * b; }
         static inline T subtract(const T a, const T b) { return a - b; }
@@ -383,7 +397,19 @@ namespace ArrayLibrary
         static inline bool greater(const T a, const T b) { return a > b; }
         static inline bool greaterEqual(const T a, const T b) { return a >= b; }
 
-        template <typename U>
+        template <DataType U, DataType V, U (*g)(V), V (*f)(const T)>
+        static inline U compose(const T x)
+        {
+            return g(f(x));
+        }
+
+        template <T (*g)(T), T (*f)(const T)>
+        static inline T compose(const T x)
+        {
+            return g(f(x));
+        }
+
+        template <DataType U>
         static inline U pow_ptw(const T a, const T b) { return (U)std::pow(a, b); }
 
         static inline T exp_ptw(const T a) { return std::exp(a); }

@@ -17,7 +17,7 @@ namespace ArrayLibrary
     }
 
     template <DataType T>
-    template <typename P, T (*f)(const T, const P&), typename Q, SimdVector<T> (*fSimd)(const SimdVector<T> &, const Q &)>
+    template <typename P, T (*f)(const T, const P &), typename Q, SimdVector<T> (*fSimd)(const SimdVector<T> &, const Q &)>
     Array<T> &Array<T>::unaryParamApply(const P &param, const Q &simdParam)
     {
         if (SimdVector<T>::supported)
@@ -27,7 +27,7 @@ namespace ArrayLibrary
     }
 
     template <DataType T>
-    template <typename P, T (*f)(const T,const P&)>
+    template <typename P, T (*f)(const T, const P &)>
     Array<T> &Array<T>::unaryParamApply(const P &param)
     {
         return unaryParamDestDispatch<T, P, f, bool>(*this, *this, param, false);
@@ -45,8 +45,8 @@ namespace ArrayLibrary
     }
 
     template <DataType T>
-    template <DataType U, typename P, U (*f)(const T, const P&), typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &)>
-    Array<U> Array<T>::unaryParamCompute(const Array<T> &source, const P &param, const Q &simdParam) 
+    template <DataType U, typename P, U (*f)(const T, const P &), typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &)>
+    Array<U> Array<T>::unaryParamCompute(const Array<T> &source, const P &param, const Q &simdParam)
     {
         auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
         if (SimdVector<U>::supported && SimdVector<T>::supported)
@@ -56,7 +56,7 @@ namespace ArrayLibrary
     }
 
     template <DataType T>
-    template <DataType U, typename P, U (*f)(const T, const P&)>
+    template <DataType U, typename P, U (*f)(const T, const P &)>
     Array<U> Array<T>::unaryParamCompute(const Array<T> &source, const P &param)
     {
         auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
@@ -209,7 +209,7 @@ namespace ArrayLibrary
 
     template <DataType T>
     template <DataType U, typename P, U (*f)(const T, const P &)>
-    void Array<T>::baseParamUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const P &param)
+    void Array<T>::baseParamUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const P param)
     {
         long boostDim = -1;
         long boostDimLength = -1;
@@ -319,7 +319,7 @@ namespace ArrayLibrary
 
     template <DataType T>
     template <DataType U, typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &), bool sourceSkip>
-    void Array<T>::simdUnaryParam(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength, const Q &param)
+    void Array<T>::simdUnaryParam(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength, const Q param)
     {
         Coordinates c(destShape.size() - 1, 0);
         bool end = false;
@@ -365,9 +365,13 @@ namespace ArrayLibrary
         for (long i = 0; i + LENGTH <= axisLength; i += LENGTH)
         {
             if (!sourceSkip)
-                source = SimdVector<T>::load(pSourceData++);
+            {
+                source = SimdVector<T>::load(pSourceData);
+                pSourceData += LENGTH;
+            }
 
-            SimdVector<U>::store(pDestData++, fSimd(source));
+            SimdVector<U>::store(pDestData, fSimd(source));
+            pDestData += LENGTH;
         }
 
         if (leftover)
@@ -391,12 +395,17 @@ namespace ArrayLibrary
         if (sourceSkip)
             source = SimdVector<T>::broadcast_set(*pSourceData);
 
-        for (long i = 0; i + LENGTH <= axisLength; i += LENGTH)
+#pragma GCC unroll 4
+        for (U *const last = pDestData + axisLength - LENGTH; pDestData <= last;)
         {
             if (!sourceSkip)
-                source = SimdVector<T>::load(pSourceData++);
+            {
+                source = SimdVector<T>::load(pSourceData);
+                pSourceData += LENGTH;
+            }
 
-            SimdVector<U>::store(pDestData++, fSimd(source, param));
+            SimdVector<U>::store(pDestData, fSimd(source, param));
+            pDestData += LENGTH;
         }
 
         if (leftover)

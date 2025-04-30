@@ -7,12 +7,6 @@
 #include "diff_binary_ptws.hpp"
 #include "diff_basic.hpp"
 
-enum class Activation
-{
-    NONE = 0,
-    LEAKYRELU = 2,
-};
-
 class Test;
 
 // template <DataType T>
@@ -32,7 +26,6 @@ private:
     Unit<T> &mTarget;
     long mDivisor = 1;
 
-public:
     MeanSquaredError(Unit<T> &prediction, Variables<T> &target) : mPrediction(prediction), mTarget(target), Unit<T>(prediction.getDiffTape(), Coordinates(0))
     {
         if (prediction.refWildcardShape() != target.refWildcardShape())
@@ -46,16 +39,22 @@ public:
         }
     }
 
+public:
+    static MeanSquaredError<T> &create(Unit<T> &prediction, Variables<T> &target)
+    {
+        return *(new MeanSquaredError<T>(prediction, target));
+    }
+
     void pullGradient() override
     {
-        Array<T> grad = (mPrediction.refArray()-mTarget.refArray())* (static_cast<T>(2)*(this->mGradient));
+        Array<T> grad = (mPrediction.refArray() - mTarget.refArray()) * ((static_cast<T>(2) / mDivisor) * (this->mGradient));
         mPrediction.mGradient += grad;
         mTarget.mGradient -= grad;
     }
 
     void calculate() override
     {
-        this->mArray = (mPrediction.refArray()-mTarget.refArray()).square().reduceSum() / mDivisor;
+        this->mArray = (mPrediction.refArray() - mTarget.refArray()).square().reduceSum() / mDivisor;
         Unit<T>::calculate();
     };
 };
@@ -63,6 +62,55 @@ public:
 template <DataType T>
 class LinearLayer
 {
+public:
+    enum class WeightInitialization : uint64_t
+    {
+        ZERO = 0,
+        TRUNCATED = 0b1,
+        UNIFORM = 0b10,
+        NORMAL = 0b100,
+        NORMAL_TRUNCATED = 0b101,
+        GLOROT = 0b1000,
+        GLOROT_UNIFORM = 0b1010,
+        GLOROT_NORMAL = 0b1100,
+        GLOROT_NORMAL_TRUNCATED = 0b1101
+    };
+
+    enum class Activation
+    {
+        NONE = 0,
+        LEAKYRELU = 2,
+    };
+
+    template <typename P = T>
+    struct Settings
+    {
+        WeightInitialization weightMatrixInit = WeightInitialization::GLOROT_UNIFORM;
+
+        bool hasFlag(WeightInitialization flag)
+        {
+            return static_cast<uint64_t>(weightMatrixInit) & static_cast<uint64_t>(flag);
+        }
+
+        Activation activation = Activation::NONE;
+        P activationParam;
+        T clipBound = 1;
+
+        Settings() = delete;
+        const bool hasCoefficients;
+
+        Settings(long nodes, Activation activation = Activation::None, P activationParam = P()) : nodes(nodes), activation(activation), activationParam(activationParam), hasCoefficients(false)
+        {
+        }
+        Settings(Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation = Activation::None, P activationParam = P()) : pWeightMatrix(&weightMatrix), pBiasVector(biasVector), activation(activation), activationParam(activationParam), hasCoefficients(true) {}
+
+        Coefficients<T> *pWeightMatrix = nullptr;
+        Coefficients<T> *pBiasVector = nullptr;
+
+        long nodes = 0;
+    };
+
+private:
     friend class Test;
 
 private:
@@ -82,23 +130,55 @@ public:
     {
     }
 
-    static LinearLayer<T> create(Unit<T> &input, Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation)
+public:
+    template <typename P>
+    static LinearLayer<T> create(Unit<T> &input, Settings<P> settings)
     {
-        auto &intermediate = matvecmul(weightMatrix, input) + biasVector;
-        switch (activation)
+        Coefficients<T> *pWeightMatrix = settings.pWeightMatrix;
+        Coefficients<T> *pBiasVector = settings.pBiasVector;
+
+        if (!settings.hasCoefficients)
+        {
+            long nodes = settings.nodes;
+            long inputLength = input.refWildcardShape()[input.getDim() - 1];
+            Array<T> rawWeights(0);
+
+            if (settings.hasFlag(WeightInitialization::UNIFORM))
+            {
+                T limit = settings.hasFlag(WeightInitialization::GLOROT) ? std::sqrt(6.0 / (nodes + inputLength)) : 1;
+                rawWeights = Model::randomArrayGenerator.uniform<T>({nodes, inputLength}, -limit, limit);
+            }
+            else if (settings.hasFlag(WeightInitialization::NORMAL))
+            {
+                T stddev = settings.hasFlag(WeightInitialization::GLOROT) ? std::sqrt(2.0 / (nodes + inputLength)) : 1;
+                rawWeights = Model::randomArrayGenerator.normal<T>({nodes, inputLength}, 0, stddev);
+                if (settings.hasFlag(WeightInitialization::TRUNCATED))
+                    rawWeights = rawWeights.clip(-settings.clipBound, settings.clipBound);
+            }
+            else
+                rawWeights = Array<T>::constant({nodes, inputLength}, 0);
+
+            pWeightMatrix = &Coefficients<T>::create(input.getDiffTape(), rawWeights);
+            pBiasVector = &Coefficients<T>::create(input.getDiffTape(), Array<T>::constant({settings.nodes}, 0));
+        }
+
+        Sum<T> &intermediate = matvecmul(*pWeightMatrix, input) + *pBiasVector;
+        switch (settings.activation)
         {
         case Activation::NONE:
-            return *(new LinearLayer<T>(input, weightMatrix, biasVector, intermediate));
+            return LinearLayer<T>(input, *pWeightMatrix, *pBiasVector, intermediate);
 
         case Activation::LEAKYRELU:
-            throw std::invalid_argument("LeakyReLU activation requires a parameter.");
+            if (!std::is_same_v<T, P>)
+                throw std::invalid_argument("The activation parameter for leaky relu activation in a layer of type T must also be of type T");
+            return LinearLayer<T>(input, *pWeightMatrix, *pBiasVector, intermediate.leakyReLu(settings.activationParam));
 
         default:
             throw std::invalid_argument("Unsupported activation function.");
         }
     }
 
-    template <typename P = T>
+    /*template <typename P = T>
     static LinearLayer<T> create(Unit<T> &input, Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation, P activationParam)
     {
         auto &intermediate = matvecmul(weightMatrix, input) + biasVector;
@@ -116,18 +196,11 @@ public:
         default:
             throw std::invalid_argument("Unsupported activation function.");
         }
-    }
+    }*/
 
     template <typename P = T>
     static LinearLayer<T> create(Unit<T> &input, long nodes, Activation activation, P activationParam)
     {
-        long inputLength = input.refWildcardShape()[input.getDim() - 1];
-        auto rawWeights = Model::randomArrayGenerator.normal<T>({nodes, inputLength}, 0, 1).clip(-1, 1);
-        auto rawBias = Model::randomArrayGenerator.normal<T>({nodes}, 0, 1).clip(-1, 1);
-        auto &weightMatrix = *(new Coefficients<T>(input.getDiffTape(), rawWeights));
-        auto &biasVector = *(new Coefficients<T>(input.getDiffTape(), rawBias));
-
-        return create<P>(input, weightMatrix, biasVector, activation, activationParam);
     }
 
     static LinearLayer<T> create(Unit<T> &input, long nodes, Activation activation)

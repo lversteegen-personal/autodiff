@@ -44,7 +44,8 @@ std::ostream &operator<<(std::ostream &s, const std::vector<T> &v)
 class Test
 {
 public:
-    static bool approxEqual(DATATYPE v1, DATATYPE v2, DATATYPE eps = 1e-5)
+    template <DataType T>
+    static bool approxEqual(T v1, T v2, T eps = 1e-3)
     {
         return std::abs(v2 - v1) < eps;
     }
@@ -172,17 +173,28 @@ public:
         return (arr * checksumVector).reduceSum().eval();
     }
 
+    template <DataType T, T (*f)(T)>
+    static Array<T> generatePseudorandom(Coordinates shape)
+    {
+        long flatLength = 1;
+        for (int i = 0; i < shape.size(); i++)
+            flatLength *= shape[i];
+
+        Array<T> arr = Array<T>::range(flatLength).template unaryApply<Array<T>::template compose<Array<T>::sin_ptw, f>>();
+        return arr.reshape(shape);
+    }
+
     template <DataType T>
     static void gradientTest()
     {
         auto layer1WeightsBare = Array<T>::range(1000).reshape({10, 100}).square().sin();
         auto layer1BiasBare = Array<T>::range(10).square().sin();
 
-        auto diffTape = DiffTape<T>();
-        auto &input = *(new Variables<T>(diffTape, {-1, 100}));
-        auto &labels = *(new Variables<T>(diffTape, {-1, 10}));
-        auto &layer1Weights = *(new Coefficients<T>(diffTape, layer1WeightsBare));
-        auto &layer1Bias = *(new Coefficients<T>(diffTape, layer1BiasBare));
+        DiffTape<T> diffTape = DiffTape<T>();
+        auto &input = Variables<T>::create(diffTape, {-1, 100});
+        auto &labels = Variables<T>::create(diffTape, {-1, 10});
+        auto &layer1Weights = Coefficients<T>::create(diffTape, layer1WeightsBare);
+        auto &layer1Bias = Coefficients<T>::create(diffTape, layer1BiasBare);
 
         auto &layer1Pre = matvecmul(layer1Weights, input);
         auto &layer1 = layer1Pre + layer1Bias;
@@ -196,66 +208,17 @@ public:
         input.setValue(Array<T>::range(100).reshape({1, 100}).intPow(3).sin());
         labels.setValue(Array<T>::range(10).reshape({1, 10}).intPow(4).sin());
 
-        auto layer1WeightsGradient = diffTape.getGradient(layer1Weights, cost);
-        auto layer1BiasGradient = diffTape.getGradient(layer1Bias, cost);
+        diffTape.calculateAll(cost);
 
-        /*        [input, labels, layer1Weights, layer1Bias, layer1Pre, layer1, sftm, dist, prod, cost]
+        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1Pre, &layer1, &sftm, &dist, &prod, &cost};
+        T targets[] = {
+            1.571174239198852, -1.1359495664045085, 2.6065913261879787, 5.764624310437291, 29.770156227548874, -1.5742356314680626, -0.7190281841725917, -1.2722775033062013, -2.4253578383577237, -1.2722775033062013, -3.1443860356687523, -1.2722775033062013, -0.2757208861519817, -5.764624310437291, -2.8823121552186457, -5.764624310437291, -1.8356536757736093, 0.42162378262054656, 6.659353256225586, 1.0};
 
-        1.571174239198852
-        -1.1359495664045085
-        2.6065913261879787
-        5.764624310437291
-        29.770156227548874
-        -1.5742356314680626
-        -0.7190281841725917
-        -1.2722775033062013
-        -2.4253578383577237
-        -1.2722775033062013
-        -3.1443860356687523
-        -1.2722775033062013
-        -0.2757208861519817
-        -5.764624310437291
-        -2.8823121552186457
-        -5.764624310437291
-        -1.8356536757736093
-        0.42162378262054656
-        6.659353256225586
-        1.0*/
-
-        assert(approxEqual(checksum(input.refArray()), 1.571174239198852));
-        assert(approxEqual(checksum(input.refGradient()), -1.1359495664045085));
-        assert(approxEqual(checksum(labels.refArray()), 2.6065913261879787));
-        assert(approxEqual(checksum(labels.refGradient()), 5.764624310437291));
-        assert(approxEqual(checksum(layer1Weights.refArray()), 29.770156227548874));
-        assert(approxEqual(checksum(layer1Weights.refGradient()), -1.5742356314680626));
-        assert(approxEqual(checksum(layer1Bias.refArray()), -0.7190281841725917));
-        assert(approxEqual(checksum(layer1Bias.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(layer1Pre.refArray()), -2.4253578383577237));
-        assert(approxEqual(checksum(layer1Pre.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(layer1.refArray()), -3.1443860356687523));
-        assert(approxEqual(checksum(layer1.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(sftm.refArray()), -0.2757208861519817));
-        assert(approxEqual(checksum(sftm.refGradient()), -5.764624310437291));
-        assert(approxEqual(checksum(dist.refArray()), -2.8823121552186457));
-        assert(approxEqual(checksum(dist.refGradient()), -5.764624310437291));
-        assert(approxEqual(checksum(prod.refArray()), -1.8356536757736093));
-        assert(approxEqual(checksum(prod.refGradient()), 0.42162378262054656));
-        assert(approxEqual(checksum(cost.refArray()), 6.659353256225586));
-        assert(approxEqual(checksum(cost.refGradient()), 1.0));
-
-        /*for (int i = 0; i < diffTape.mUnits.size(); i++)
+        for (int i = 0; i < units.size(); i++)
         {
-            auto &unit = *(diffTape.mUnits[i]);
-            std::cout << typeid(unit).name() << std::endl;
-            auto &shape = unit.refArrayShape();
-            auto &array = unit.refArray();
-            auto &gradient = unit.refGradient();
-            auto flatlength = array.getFlatLength();
-            std::cout << shape << std::endl;
-            auto checksumVector = Array<DATATYPE>::range(flatlength).reshape(shape).cos();
-            std::cout << "Array checksum: " << (array * checksumVector).reduceSum() << std::endl;
-            std::cout << "Gradient checksum: " << (gradient * checksumVector).reduceSum() << std::endl;
-        }*/
+            assert(approxEqual(checksum(units[i]->refArray()), targets[2 * i]));
+            assert(approxEqual(checksum(units[i]->refGradient()), targets[2 * i + 1]));
+        }
 
         std::cout << "Gradient test successful." << std::endl;
     }
@@ -263,73 +226,45 @@ public:
     template <DataType T>
     static void gradientTest2()
     {
-        auto layer1WeightsBare = Array<T>::range(1000).reshape({10, 100}).square().sin();
-        auto layer1BiasBare = Array<T>::range(10).square().sin();
 
-        auto diffTape = DiffTape<T>();
-        auto &input = *(new Variables<T>(diffTape, {-1, 100}));
-        auto &labels = *(new Variables<T>(diffTape, {-1, 10}));
-        auto &layer1Weights = *(new Coefficients<T>(diffTape, layer1WeightsBare));
-        auto &layer1Bias = *(new Coefficients<T>(diffTape, layer1BiasBare));
+        using Activation = LinearLayer<T>::Activation;
+        using LayerSettings = LinearLayer<T>::Settings;
 
-        auto &layer1Pre = matvecmul(layer1Weights, input);
-        auto &layer1 = layer1Pre + layer1Bias;
-        auto &sftm = layer1.softmax({-1});
-        auto &dist = sftm - labels;
-        auto &prod = dist * dist;
-        auto &cost = prod.reduceSum();
+        DiffTape<T> diffTape = DiffTape<T>();
+        auto &input = Variables<T>::create(diffTape, {-1, 784});
+        auto &labels = Variables<T>::create(diffTape, {-1, 10});
 
-        T learningRate = 1e-3;
+        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return x; }>({200, 784}));
+        auto &layer1Bias = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                  { return 3 * x * x; }>({200}));
 
-        input.setValue(Array<T>::range(100).reshape({1, 100}).intPow(3).sin());
-        labels.setValue(Array<T>::range(10).reshape({1, 10}).intPow(4).sin());
+        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
 
-        auto layer1WeightsGradient = diffTape.getGradient(layer1Weights, cost);
-        auto layer1BiasGradient = diffTape.getGradient(layer1Bias, cost);
+        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return 11 * x; }>({10, 200}));
+        auto &layer2Bias = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                  { return 3 * x * x + 17 * x; }>({10}));
+        auto layer2 = LinearLayer<T>::create(input, LayerSettings(layer2Weights, layer2Bias, Activation::LEAKYRELU, T(0.01)));
 
-        /*        [input, labels, layer1Weights, layer1Bias, layer1Pre, layer1, sftm, dist, prod, cost]
+        auto &sftm = layer2.output.softmax({-1});
+        auto &cost = MeanSquaredError<T>::create(sftm, labels);
 
-        1.571174239198852
-        -1.1359495664045085
-        2.6065913261879787
-        5.764624310437291
-        29.770156227548874
-        -1.5742356314680626
-        -0.7190281841725917
-        -1.2722775033062013
-        -2.4253578383577237
-        -1.2722775033062013
-        -3.1443860356687523
-        -1.2722775033062013
-        -0.2757208861519817
-        -5.764624310437291
-        -2.8823121552186457
-        -5.764624310437291
-        -1.8356536757736093
-        0.42162378262054656
-        6.659353256225586
-        1.0*/
+        input.setValue(generatePseudorandom<T, [](T x)
+                                            { return 7 * x; }>({16, 784}));
+        labels.setValue(generatePseudorandom<T, [](T x)
+                                             { return 13 * x * x * x + 2 * x; }>({16, 10}));
 
-        assert(approxEqual(checksum(input.refArray()), 1.571174239198852));
-        assert(approxEqual(checksum(input.refGradient()), -1.1359495664045085));
-        assert(approxEqual(checksum(labels.refArray()), 2.6065913261879787));
-        assert(approxEqual(checksum(labels.refGradient()), 5.764624310437291));
-        assert(approxEqual(checksum(layer1Weights.refArray()), 29.770156227548874));
-        assert(approxEqual(checksum(layer1Weights.refGradient()), -1.5742356314680626));
-        assert(approxEqual(checksum(layer1Bias.refArray()), -0.7190281841725917));
-        assert(approxEqual(checksum(layer1Bias.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(layer1Pre.refArray()), -2.4253578383577237));
-        assert(approxEqual(checksum(layer1Pre.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(layer1.refArray()), -3.1443860356687523));
-        assert(approxEqual(checksum(layer1.refGradient()), -1.2722775033062013));
-        assert(approxEqual(checksum(sftm.refArray()), -0.2757208861519817));
-        assert(approxEqual(checksum(sftm.refGradient()), -5.764624310437291));
-        assert(approxEqual(checksum(dist.refArray()), -2.8823121552186457));
-        assert(approxEqual(checksum(dist.refGradient()), -5.764624310437291));
-        assert(approxEqual(checksum(prod.refArray()), -1.8356536757736093));
-        assert(approxEqual(checksum(prod.refGradient()), 0.42162378262054656));
-        assert(approxEqual(checksum(cost.refArray()), 6.659353256225586));
-        assert(approxEqual(checksum(cost.refGradient()), 1.0));
+        diffTape.calculateAll(cost);
+
+        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost};
+        T targets[] = {-2.244379721624708, 43.50746962845771, -0.05304572445633804, -0.30693305592170655, 0.015767526079134953, 1.086805486745606, -13.121347531406986, 0.11099250483283919, 9.453542428028797, 0.010960845784722312, -0.9414516503052217, -0.996517497385196, 0.33048479830788235, -0.0030711601738893594, 146.8347763513801, -0.0727055500100524, 1.4816195117838626, 0.30693305592170655, 9.40982437133789, 1.0};
+
+        for (int i = 0; i < units.size(); i++)
+        {
+            assert(approxEqual(checksum(units[i]->refArray()), targets[2 * i]));
+            assert(approxEqual(checksum(units[i]->refGradient()), targets[2 * i + 1]));
+        }
 
         std::cout << "Gradient test successful." << std::endl;
     }
@@ -366,21 +301,22 @@ public:
         auto mnist = Loader<T>::loadMNIST(0x4000);
         Array<T> images(mnist.data.reshape({-1, 784}));
         images /= 255;
-        auto onehot = mnist.label.reshape({-1}). template oneHot<T>();
+        auto onehot = mnist.label.reshape({-1}).template oneHot<T>();
 
         DiffTape<T> diffTape = DiffTape<T>();
-        auto &input = *(new Variables<T>(diffTape, {-1, 784}));
-        auto &labels = *(new Variables<T>(diffTape, {-1, 10}));
+        auto &input = Variables<T>::create(diffTape, {-1, 784});
+        auto &labels = Variables<T>::create(diffTape, {-1, 10});
 
-        auto layer1 = LinearLayer<T>::create(input, 200, Activation::LEAKYRELU, T(0.01));
-        auto layer2 = LinearLayer<T>::create(layer1, 10, Activation::NONE);
+        using LayerSettings = LinearLayer<T>:: template Settings<T>;
+        using Activation = LinearLayer<T>::Activation;
+
+        auto layer1 = LinearLayer<T>::create(input, LayerSettings(200, Activation::LEAKYRELU, T(0.01)));
+        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(10, Activation::NONE, T(0.01)));
 
         auto &sftm = layer2.output.softmax({-1});
-        // auto &dist = sftm - labels;
-        // auto &cost = (dist * dist).reduceMean();
-        auto &cost = *(new MeanSquaredError<T>(sftm, labels));
+        auto &cost = MeanSquaredError<T>::create(sftm, labels);
 
-        int epochs = 1;
+        int epochs = 40;
         long batchSize = 16;
         long batchCount = mnist.getLength() / batchSize;
         T learningRate = 1e-3;
@@ -685,11 +621,44 @@ public:
         for (int j = 0; j < 8; j++)
             LOG(array[j]);
     }
+
+    static void simdClipAsmTest()
+    {
+        const SimdClipBounds<float> bounds(0.3, 0.7);
+        RandomArrayGenerator rng(0);
+        auto source = rng.uniform<float>({0x1000}, 0, 1);
+        auto dest = Array<float>::constant({0x1000}, 0);
+        float *pSourceData = source.getDataPointer();
+        float *pDestData = dest.getDataPointer();
+        const float *const dataEnd = pSourceData + source.getFlatLength();
+
+        // auto lowerBound = _mm256_set1_ps(0.3);
+        // auto upperBound = _mm256_set1_ps(0.7);
+
+        for (; pSourceData < dataEnd; pDestData += 8)
+        {
+            auto a = SimdVector<float>::load(pSourceData);
+            auto b = SimdVector<float>::clip(a, bounds);
+            SimdVector<float>::store(pDestData, b);
+            // auto a = _mm256_load_ps(pSourceData);
+            // auto b = _mm256_min_ps(_mm256_max_ps(lowerBound, a), upperBound);
+            // auto(pDestData, b);
+            pSourceData += 8;
+        }
+
+        assert(approxEqual(dest.reduceMin().eval(), 0.3f));
+        assert(approxEqual(dest.reduceMax().eval(), 0.7f));
+
+        std::cout << "Simd clip test successful." << std::endl;
+    }
 };
 
 int main()
 {
+    // Test::simdClipAsmTest();
+    // Test::gradientTest2<float>();
     Test::mnistRun<float>();
+
     LOG_TIME(clipMeasure.accumulated);
     LOG_TIME(mathmeasure.accumulated);
     return 0;

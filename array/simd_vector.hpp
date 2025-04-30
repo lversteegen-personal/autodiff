@@ -18,8 +18,8 @@ namespace ArrayLibrary
     template <DataType T>
     struct SimdClipBounds
     {
-        SimdVector<T> lowerBound;
-        SimdVector<T> upperBound;
+        const SimdVector<T> lowerBound;
+        const SimdVector<T> upperBound;
         SimdClipBounds() = delete;
 
         SimdClipBounds(T lower, T upper) : lowerBound(SimdVector<T>::broadcast_set(lower)), upperBound(SimdVector<T>::broadcast_set(upper))
@@ -142,7 +142,7 @@ namespace ArrayLibrary
         // Clip the values of a to be between least and most
         static inline SimdVector<T> clip(const SimdVector<T> &a, const SimdClipBounds<T> &bounds)
         {
-            return max(bounds.lowerBound, min(bounds.upperBound, a));
+            return MAX(bounds.lowerBound.mInternal, MIN(bounds.upperBound.mInternal, a.mInternal));
         }
     };
 

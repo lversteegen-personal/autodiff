@@ -17,8 +17,13 @@ class Variables : public Unit<T>
         return true;
     }
 
+    Variables(DiffTape<T> &diffTape, const Coordinates &wildcardShape) : Unit<T>(diffTape, wildcardShape) {};
+
 public:
-    Variables(DiffTape<T> &diffTape, const Coordinates &wildcardShape) : Unit<T>(diffTape, wildcardShape){};
+    static Variables<T> &create(DiffTape<T> &diffTape, const Coordinates &wildcardShape)
+    {
+        return *(new Variables<T>(diffTape, wildcardShape));
+    }
 
     void setValue(const Array<T> &value)
     {
@@ -37,9 +42,21 @@ template <DataType T>
 class Coefficients : public Unit<T>
 {
 public:
-    Coefficients(DiffTape<T> &diffTape, const Array<T> &array) : Unit<T>(diffTape, array){};
+private:
+    Coefficients(DiffTape<T> &diffTape, const Array<T> &array) : Unit<T>(diffTape, array) {};
 
-    Coefficients(DiffTape<T> &diffTape, std::initializer_list<T> values) : Unit<T>(diffTape, Array<T>(values)){};
+    Coefficients(DiffTape<T> &diffTape, const std::initializer_list<T> &values) : Unit<T>(diffTape, Array<T>(values)) {};
+
+public:
+    static Coefficients<T> &create(DiffTape<T> &diffTape, const Array<T> &array)
+    {
+        return *(new Coefficients(diffTape, array));
+    }
+
+    static Coefficients<T> &create(DiffTape<T> &diffTape, const std::initializer_list<T> &values)
+    {
+        return *(new Coefficients(diffTape, values));
+    }
 
     Array<T> &refCoefficientArray()
     {
@@ -97,7 +114,7 @@ public:
     };
 };
 
-template <DataType T, typename P, T (*f)(const T, const P&), T (*df)(const T, const P&)>
+template <DataType T, typename P, T (*f)(const T, const P &), T (*df)(const T, const P &)>
 class ParamPointwise : public Unit<T>
 {
 private:

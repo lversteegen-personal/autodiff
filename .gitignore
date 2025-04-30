@@ -1,7 +1,4 @@
 .vscode
 tests
 data
-main.ii
-main.o
-main.s
 main.exe

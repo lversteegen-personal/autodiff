@@ -1,7 +1,11 @@
 1. In-place binary compute and in-place versions of array level functions like exp
 2. SIMD for inner product (and some of the pointwise operations?)
     - SIMD for matrix multiplication is partially done, but maybe I want gather-load SIMD for non-contigous arrays
-    - Definitely need SIMD for pointwise operations and reduce
+    - SIMD for ptws operations also partially done, but non-SIMD base versions should also make use of memory localization
+    - Still need SIMD for reduce
 3. Proper testing
-4. More direct version of operator= for array
+    - More extensive version of gradientTest()
+4. More direct version of operator= for array and scalar
 5. Use preprocessor check for data alignment for debug version and platforms that do not use Microsoft C Runtime Library
+6. Give autodiff its own namespace and make namespace level factory functions for unit creation
+7. ADAM optimizer

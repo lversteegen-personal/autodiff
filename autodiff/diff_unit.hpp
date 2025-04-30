@@ -153,6 +153,8 @@ public:
     const Coordinates &refWildcardShape() const { return mWildcardShape; }
     const long getDim() const { return mWildcardShape.size(); }
 
+protected:
+
     Unit(DiffTape<T> &diffTape, const Coordinates &shape) : mDiffTape(diffTape), mWildcardShape(shape)
     {
         bool hasWildcard = false;
@@ -179,6 +181,7 @@ public:
     };
 
 public:
+
     Unit() = delete;
     Unit(const Unit<T> &other) = delete;
     Unit(Unit<T> &&other) = delete;
