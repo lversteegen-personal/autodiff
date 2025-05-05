@@ -121,6 +121,8 @@ public:
 
         for (long i = 0; i < mUnits.size(); i++)
         {
+            //std::cout << "Calculating unit " << typeid(*mUnits[i]).name() << std::endl;
+            //std::cout << mUnits[i]->refWildcardShape() << std::endl;
             if (mMeasurePerformance)
             {
                 mCalcPerformanceMeasures[i].start();
@@ -129,8 +131,6 @@ public:
             }
             else
                 mUnits[i]->calculate();
-            // std::cout << "Calculating unit " << typeid(*mUnits[i]).name() << std::endl;
-            // std::cout << mUnits[i]->refArrayShape() << std::endl;
         }
         mCalcProgress = mUnits.size();
 
@@ -167,6 +167,8 @@ public:
         {
             for (long i = mCalcProgress + 1; i <= outputPosition; i++)
             {
+                //std::cout << "Calculating unit " << typeid(*mUnits[i]).name() << std::endl;
+                //std::cout << mUnits[i]->redWildcardShape() << std::endl;
                 if (mMeasurePerformance)
                 {
                     mCalcPerformanceMeasures[i].start();
@@ -175,8 +177,6 @@ public:
                 }
                 else
                     mUnits[i]->calculate();
-                // std::cout << "Calculating unit " << typeid(*mUnits[i]).name() << std::endl;
-                // std::cout << mUnits[i]->refArrayShape() << std::endl;
             }
             mCalcProgress = outputPosition;
         }

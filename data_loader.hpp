@@ -71,7 +71,7 @@ public:
             lineLabels.push_back(label);
         }
 
-        return LabeledData{Array<T>::fromFlatLines(lineData), Array<int>::fromFlatLines(lineLabels)};
+        return LabeledData{Array<T>::fromFlatLines(lineData), Array<int>::fromFlatLines(lineLabels).reshape({-1})};
     }
 };
 

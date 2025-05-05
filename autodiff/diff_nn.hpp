@@ -96,18 +96,21 @@ public:
         P activationParam;
         T clipBound = 1;
 
+        Coefficients<T> *pWeightMatrix = nullptr;
+        Coefficients<T> *pBiasVector = nullptr;
+
+        long nodes = 0;
+
         Settings() = delete;
         const bool hasCoefficients;
 
         Settings(long nodes, Activation activation = Activation::None, P activationParam = P()) : nodes(nodes), activation(activation), activationParam(activationParam), hasCoefficients(false)
         {
         }
-        Settings(Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation = Activation::None, P activationParam = P()) : pWeightMatrix(&weightMatrix), pBiasVector(biasVector), activation(activation), activationParam(activationParam), hasCoefficients(true) {}
 
-        Coefficients<T> *pWeightMatrix = nullptr;
-        Coefficients<T> *pBiasVector = nullptr;
-
-        long nodes = 0;
+        Settings(Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation = Activation::None, P activationParam = P()) : nodes(weightMatrix.refWildcardShape()[weightMatrix.refWildcardShape().size()-2]), pWeightMatrix(&weightMatrix), pBiasVector(&biasVector), activation(activation), activationParam(activationParam), hasCoefficients(true)
+        {
+        }
     };
 
 private:
@@ -161,6 +164,17 @@ public:
             pWeightMatrix = &Coefficients<T>::create(input.getDiffTape(), rawWeights);
             pBiasVector = &Coefficients<T>::create(input.getDiffTape(), Array<T>::constant({settings.nodes}, 0));
         }
+        else
+        {
+            if (settings.pWeightMatrix == nullptr || settings.pBiasVector == nullptr)
+                throw std::invalid_argument("Weight matrix and bias vector must be provided if hasCoefficients is true.");
+            if (settings.pWeightMatrix->refWildcardShape().get(-2) != settings.nodes)
+                throw std::invalid_argument("Weight matrix must have the same number of rows as the number of nodes.");
+            if (settings.pWeightMatrix->refWildcardShape().get(-1) != input.refWildcardShape().get(-1))
+                throw std::invalid_argument("Weight matrix must have the same number of columns as the input length.");
+            if (settings.pBiasVector->refWildcardShape().get(-1) != settings.nodes)
+                throw std::invalid_argument("Bias vector must have the same number of elements as the number of nodes.");
+        }
 
         Sum<T> &intermediate = matvecmul(*pWeightMatrix, input) + *pBiasVector;
         switch (settings.activation)
@@ -177,26 +191,6 @@ public:
             throw std::invalid_argument("Unsupported activation function.");
         }
     }
-
-    /*template <typename P = T>
-    static LinearLayer<T> create(Unit<T> &input, Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation, P activationParam)
-    {
-        auto &intermediate = matvecmul(weightMatrix, input) + biasVector;
-        switch (activation)
-        {
-        case Activation::NONE:
-            return LinearLayer<T>(input, weightMatrix, biasVector, intermediate);
-
-        case Activation::LEAKYRELU:
-            if (std::is_same_v<T, P>)
-                return LinearLayer<T>(input, weightMatrix, biasVector, intermediate.leakyReLu((T)activationParam));
-            else
-                throw std::invalid_argument("Activation parameter type for LeakyReLu must be the same as the type of the units.");
-
-        default:
-            throw std::invalid_argument("Unsupported activation function.");
-        }
-    }*/
 
     template <typename P = T>
     static LinearLayer<T> create(Unit<T> &input, long nodes, Activation activation, P activationParam)

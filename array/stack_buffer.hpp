@@ -217,18 +217,28 @@ public:
 
     inline T &operator[](long i) noexcept
     {
-        // assertm(i >= 0 && i < mSize, "The index is out of range.");
+#ifdef DEBUG_MODE
+        assertm(i >= 0 && i < mSize, "The index is out of range.");
+#endif
+
         return mBuffer[i];
     }
 
     inline const T &operator[](long i) const noexcept
     {
-        // assertm(i >= 0 && i < mSize, "The index is out of range.");
+#ifdef DEBUG_MODE
+        assertm(i >= 0 && i < mSize, "The index is out of range.");
+#endif
+
         return mBuffer[i];
     }
 
-    T read(long i) const noexcept
+    T get(long i) const noexcept
     {
+        i = i % mSize;
+        if (i < 0)
+            i += mSize;
+
         return mBuffer[i];
     }
 

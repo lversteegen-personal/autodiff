@@ -21,6 +21,10 @@
 #define LOG_TIME(x) std::cout << #x << ": \t" << std::chrono::duration_cast<std::chrono::microseconds>(x) << std::endl
 #define DATATYPE float
 
+#define DEBUG_MODE
+
+#include "save_bmp.h"
+
 #include "array/array_library.hpp"
 #include "autodiff/autodiff.hpp"
 #include "autodiff/diff_nn.hpp"
@@ -47,7 +51,9 @@ public:
     template <DataType T>
     static bool approxEqual(T v1, T v2, T eps = 1e-3)
     {
-        return std::abs(v2 - v1) < eps;
+        auto max = std::max(std::abs(v1), std::abs(v2));
+        max = max < 1 ? 1 : max;
+        return std::abs(v2 - v1) / max < eps;
     }
 
     static void matmulPerfShape()
@@ -227,8 +233,8 @@ public:
     static void gradientTest2()
     {
 
+        using LayerSettings = LinearLayer<T>::template Settings<T>;
         using Activation = LinearLayer<T>::Activation;
-        using LayerSettings = LinearLayer<T>::Settings;
 
         DiffTape<T> diffTape = DiffTape<T>();
         auto &input = Variables<T>::create(diffTape, {-1, 784});
@@ -245,7 +251,7 @@ public:
                                                                                      { return 11 * x; }>({10, 200}));
         auto &layer2Bias = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
                                                                                   { return 3 * x * x + 17 * x; }>({10}));
-        auto layer2 = LinearLayer<T>::create(input, LayerSettings(layer2Weights, layer2Bias, Activation::LEAKYRELU, T(0.01)));
+        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
 
         auto &sftm = layer2.output.softmax({-1});
         auto &cost = MeanSquaredError<T>::create(sftm, labels);
@@ -263,10 +269,137 @@ public:
         for (int i = 0; i < units.size(); i++)
         {
             assert(approxEqual(checksum(units[i]->refArray()), targets[2 * i]));
+        }
+
+        for (int i = 0; i < units.size(); i++)
+        {
             assert(approxEqual(checksum(units[i]->refGradient()), targets[2 * i + 1]));
         }
 
         std::cout << "Gradient test successful." << std::endl;
+    }
+
+    /*template <DataType T>
+    static void gradientTestMnist()
+    {
+        auto mnist = Loader<T>::loadMNIST(0x4000);
+        Array<T> images(mnist.data.reshape({-1, 784}));
+        images /= 255;
+        auto onehot = mnist.label.template oneHot<T>();
+
+        using LayerSettings = LinearLayer<T>::template Settings<T>;
+        using Activation = LinearLayer<T>::Activation;
+
+        DiffTape<T> diffTape = DiffTape<T>();
+        auto &input = Variables<T>::create(diffTape, {-1, 784});
+        auto &labels = Variables<T>::create(diffTape, {-1, 10});
+
+        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return x * x; }>({200, 784}) *
+                                                                    std::sqrt(6.0 / (784 + 200)));
+        auto &layer1Bias = Coefficients<T>::create(diffTape, Array<T>::constant({200}, 0));
+
+        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
+
+        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return x * x; }>({10, 200}) *
+                                                                    std::sqrt(6.0 / (200 + 10)));
+        auto &layer2Bias = Coefficients<T>::create(diffTape, Array<T>::constant({10}, 0));
+
+        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
+
+        auto &sftm = layer2.output.softmax({-1});
+        auto &cost = MeanSquaredError<T>::create(sftm, labels);
+
+        input.setValue(mnist.data.slice({0}, {16}));
+        labels.setValue(onehot.slice({0}, {16}));
+
+        diffTape.calculateAll(cost);
+
+        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost};
+        T targets1[] = {-0.3967533457503727, -0.008208444253053601, -0.8704844306745688, -0.29677117442197276, 27.574123520337626, -0.03632134417143752, 0.0, -0.10300240543684935, 17.481087726477313, -0.025083196563216396, 11.299552865185444, 0.22366353266626227, 0.0, 0.05524654861660283, 5.217154828019423, 0.05343362330526041, 0.6133714012233566, 0.29677117442197276, 1.4584695100784302, 1.0};
+
+        for (int i = 0; i < units.size(); i++)
+        {
+            std::cout << "Unit " << i << " (" << typeid(*(units[i])).name() << ")" << std::endl;
+            LOG(units[i]->refWildcardShape());
+            assert(approxEqual(checksum(units[i]->refArray()), targets1[2 * i]));
+            assert(approxEqual(checksum(units[i]->refGradient()), targets1[2 * i + 1]));
+        }
+
+        T targets2[] = {27.5741601085202, 0.00010300241060871736, 11.29932905014783, -5.524654736614849e-05};
+
+        layer1.applyGradient(diffTape, cost, 1e-3, 1000);
+        layer2.applyGradient(diffTape, cost, 1e-3, 1000);
+
+        assert(approxEqual(checksum(layer1.mWeightMatrix.refArray()), targets2[0]));
+        assert(approxEqual(checksum(layer1.mBiasVector.refArray()), targets2[0]));
+        assert(approxEqual(checksum(layer2.mWeightMatrix.refArray()), targets2[0]));
+        assert(approxEqual(checksum(layer2.mBiasVector.refArray()), targets2[0]));
+
+        std::cout << "Gradient test successful." << std::endl;
+    }*/
+
+    template <DataType T>
+    static void gradientTestMnist()
+    {
+        auto mnist = Loader<T>::loadMNIST(0x4000);
+        Array<T> images(mnist.data.reshape({-1, 784}));
+        images /= 255;
+        auto onehot = mnist.label.template oneHot<T>();
+
+        using LayerSettings = LinearLayer<T>::template Settings<T>;
+        using Activation = LinearLayer<T>::Activation;
+
+        DiffTape<T> diffTape = DiffTape<T>();
+        auto &input = Variables<T>::create(diffTape, {-1, 784});
+        auto &labels = Variables<T>::create(diffTape, {-1, 10});
+
+        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return x * x; }>({200, 784}) *
+                                                                    std::sqrt(6.0 / (784 + 200)));
+        auto &layer1Bias = Coefficients<T>::create(diffTape, Array<T>::constant({200}, 0));
+
+        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
+
+        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
+                                                                                     { return x * x; }>({10, 200}) *
+                                                                    std::sqrt(6.0 / (200 + 10)));
+        auto &layer2Bias = Coefficients<T>::create(diffTape, Array<T>::constant({10}, 0));
+
+        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
+
+        auto &sftm = layer2.output.softmax({-1});
+        auto &cost = MeanSquaredError<T>::create(sftm, labels);
+
+        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost}; //{&layer1Weights, &layer1Bias, &layer2Weights, &layer2Bias};
+        T totalCost = 0;
+
+        for (int i = 0; i < 5; i++)
+        {
+            auto batchStart = i * 0x10;
+            auto batchEnd = (i + 1) * 0x10;
+
+            input.setValue(images.slice({batchStart}, {batchEnd}));
+            labels.setValue(onehot.slice({batchStart}, {batchEnd}));
+
+            diffTape.calculateAll(cost);
+
+            LOG(i);
+            LOG(cost.refArray().eval());
+            for (int k = 0; k < units.size(); k++)
+            {
+                std::cout << "Unit " << k << " (" << typeid(*(units[k])).name() << ")" << std::endl;
+                LOG(units[k]->refWildcardShape());
+                LOG(checksum(units[k]->refArray()));
+                LOG(checksum(units[k]->refGradient()));
+            }
+
+            layer1.applyGradient(diffTape, cost, 1e-3, 1000);
+            layer2.applyGradient(diffTape, cost, 1e-3, 1000);
+
+            totalCost += cost.refArray().eval();
+        }
     }
 
     static void performanceMeasureTest()
@@ -301,13 +434,13 @@ public:
         auto mnist = Loader<T>::loadMNIST(0x4000);
         Array<T> images(mnist.data.reshape({-1, 784}));
         images /= 255;
-        auto onehot = mnist.label.reshape({-1}).template oneHot<T>();
+        auto onehot = mnist.label.template oneHot<T>();
 
         DiffTape<T> diffTape = DiffTape<T>();
         auto &input = Variables<T>::create(diffTape, {-1, 784});
         auto &labels = Variables<T>::create(diffTape, {-1, 10});
 
-        using LayerSettings = LinearLayer<T>:: template Settings<T>;
+        using LayerSettings = LinearLayer<T>::template Settings<T>;
         using Activation = LinearLayer<T>::Activation;
 
         auto layer1 = LinearLayer<T>::create(input, LayerSettings(200, Activation::LEAKYRELU, T(0.01)));
@@ -316,15 +449,14 @@ public:
         auto &sftm = layer2.output.softmax({-1});
         auto &cost = MeanSquaredError<T>::create(sftm, labels);
 
-        int epochs = 40;
+        int epochs = 10;
         long batchSize = 16;
         long batchCount = mnist.getLength() / batchSize;
         T learningRate = 1e-3;
-        T clipValue = 1;
+        T clipValue = 1000;
         T totalCost = 0;
 
         PerformanceMeasure overallMeasure;
-        PerformanceMeasure setMeasure;
         PerformanceMeasure calculateMeasure;
         PerformanceMeasure applyMeasure;
 
@@ -339,10 +471,8 @@ public:
                 auto batchStart = i * batchSize;
                 auto batchEnd = (i + 1) * batchSize;
 
-                setMeasure.start();
                 input.setValue(images.slice({batchStart}, {batchEnd}));
                 labels.setValue(onehot.slice({batchStart}, {batchEnd}));
-                setMeasure.stop();
 
                 calculateMeasure.start();
                 diffTape.calculateAll(cost);
@@ -378,7 +508,6 @@ public:
             LOG(diffTape.getGradientPerformance(i));
         }
         LOG_TIME(overallMeasure.accumulated);
-        LOG_TIME(setMeasure.accumulated);
         LOG_TIME(calculateMeasure.accumulated);
         LOG_TIME(applyMeasure.accumulated);
     }
@@ -651,15 +780,38 @@ public:
 
         std::cout << "Simd clip test successful." << std::endl;
     }
+
+    static void mnistDataLoad()
+    {
+        auto mnist = Loader<float>::loadMNIST(0x4000);
+
+        uint8_t image[784 * 3];
+
+        for (int y = 0; y < 28; y++)
+            for (int x = 0; x < 28; x++)
+            {
+                uint8_t brightness = 255 - mnist.data[{0, 28 * y + x}];
+                image[3 * (28 * y + x)] = brightness;
+                image[3 * (28 * y + x) + 1] = brightness;
+                image[3 * (28 * y + x) + 2] = brightness;
+            }
+
+        bitmap::save_bmp("data/image0.bmp", 28, 28, image);
+
+        assert(approxEqual(checksum(mnist.data / 255), 225.26734378538023f));
+        assert(approxEqual(checksum(mnist.label.oneHot<float>()), 28.917950711077776f));
+
+        std::cout << "MNIST data load test successful." << std::endl;
+    }
 };
 
 int main()
 {
     // Test::simdClipAsmTest();
     // Test::gradientTest2<float>();
+    // Test::gradientTestMnist<float>();
     Test::mnistRun<float>();
+    // Test::mnistDataLoad();
 
-    LOG_TIME(clipMeasure.accumulated);
-    LOG_TIME(mathmeasure.accumulated);
     return 0;
 }

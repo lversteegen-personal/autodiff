@@ -2,3 +2,6 @@
 tests
 data
 main.exe
+main.ii
+main.o
+main.s

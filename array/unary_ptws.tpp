@@ -37,7 +37,7 @@ namespace ArrayLibrary
     template <DataType U, U (*f)(const T), SimdVector<U> (*fSimd)(const SimdVector<T> &)>
     Array<U> Array<T>::unaryCompute(const Array<T> &source)
     {
-        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
+        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides, 0, true);
         if (SimdVector<U>::supported && SimdVector<T>::supported)
             return unaryDestDispatch<U, f, fSimd>(source, result);
         else
@@ -48,7 +48,7 @@ namespace ArrayLibrary
     template <DataType U, typename P, U (*f)(const T, const P &), typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &)>
     Array<U> Array<T>::unaryParamCompute(const Array<T> &source, const P &param, const Q &simdParam)
     {
-        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
+        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides, 0, true);
         if (SimdVector<U>::supported && SimdVector<T>::supported)
             return unaryParamDestDispatch<U, P, f, Q, fSimd>(source, result, param, simdParam);
         else
@@ -59,7 +59,7 @@ namespace ArrayLibrary
     template <DataType U, typename P, U (*f)(const T, const P &)>
     Array<U> Array<T>::unaryParamCompute(const Array<T> &source, const P &param)
     {
-        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides);
+        auto result = Array<U>(Data<U>(source.mFlatLength), source.mShape, source.mStrides, 0, true);
         return unaryParamDestDispatch<U, P, f, bool>(source, result, param, false);
     }
 

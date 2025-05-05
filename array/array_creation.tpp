@@ -10,7 +10,7 @@ namespace ArrayLibrary
     Array<T> Array<T>::fromFlatLines(const std::vector<Data<T>> &lines)
     {
         if (lines.size() == 0)
-            return Array<T>(Data<T>(0), Coordinates(0));
+            return Array<T>(Data<T>(0), {0});
 
         auto length = lines[0].size();
 
@@ -20,7 +20,7 @@ namespace ArrayLibrary
                 throw std::invalid_argument("All lines must have the same size.");
         }
 
-        auto result = Array<T>(Data<T>(lines.size() * length), Coordinates({lines.size(), length}));
+        auto result = Array<T>(Data<T>(lines.size() * length), {lines.size(), length});
 
         T *pResultData = result.getDataPointer();
         for (long l = 0; l < lines.size(); l++)

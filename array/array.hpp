@@ -84,7 +84,7 @@ namespace ArrayLibrary
         Coordinates mShape;
         Coordinates mStrides;
         long mOffset = 0;
-        bool mContiguous = false;
+        bool mContiguous = true;
 
     private:
         long mDim;
@@ -118,34 +118,34 @@ namespace ArrayLibrary
         Array(Array<T> &&other) = default;
 
     private:
-        Array(const Data<T> &data, const Coordinates &shape, const Coordinates &strides, long offset = 0, bool contiguous = false) : mData(data), mFlatLength(calculateFlatLength(shape)), mDim(shape.size()), mShape(shape), mStrides(strides), mOffset(offset), mContiguous(contiguous)
+        Array(const Data<T> &data, const Coordinates &shape, const Coordinates &strides, long offset, bool contiguous) : mData(data), mFlatLength(calculateFlatLength(shape)), mDim(shape.size()), mShape(shape), mStrides(strides), mOffset(offset), mContiguous(contiguous)
         {
         }
 
     public:
-        Array(const T &single) : mData(Data<T>(1)), mFlatLength(1), mShape(0), mStrides(0), mDim(0)
+        Array(const T &single) : mData(Data<T>(1)), mFlatLength(1), mShape(0), mStrides(0), mDim(0), mContiguous(true)
         {
             mData[0] = single;
         }
 
-        Array(const Data<T> &data, const Coordinates &shape, const long offset = 0) : mData(data), mFlatLength(calculateFlatLength(shape)), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset)
+        Array(const Data<T> &data, const Coordinates &shape, const long offset=0) : mData(data), mFlatLength(calculateFlatLength(shape)), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset), mContiguous(true)
         {
             calculateStrides();
         }
 
-        Array(const Data<T> &data) : mData(data), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1) {}
+        Array(const Data<T> &data) : mData(data), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1), mContiguous(true)  {}
 
-        Array(const std::vector<T> &data) : mData(data), mShape({data.size()}), mFlatLength(data.size()), mStrides({1}), mDim(1) {}
+        Array(const std::vector<T> &data) : mData(data), mShape({data.size()}), mFlatLength(data.size()), mStrides({1}), mDim(1), mContiguous(true)  {}
 
-        Array(const std::initializer_list<T> &values) : mData(values), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1) {}
+        Array(const std::initializer_list<T> &values) : mData(values), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1), mContiguous(true) {}
 
         Array<T> copy() const
         {
             if (mContiguous)
-                return Array<T>(mData.copy(mOffset, mOffset + mFlatLength), mShape, mStrides);
+                return Array<T>(mData.copy(mOffset, mOffset + mFlatLength), mShape, mStrides, 0, true);
             else
             {
-                auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides, 0);
+                auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides, 0, true);
                 return unaryDestDispatch<T, copy>(*this, result);
             }
         }
@@ -159,7 +159,7 @@ namespace ArrayLibrary
             axis2 = axis2 < 0 ? mDim + axis2 : axis2;
 
             Array<T> result(*this);
-            result.mContiguous = true;
+            result.mContiguous = false;
             std::swap(result.mShape[axis1], result.mShape[axis2]);
             std::swap(result.mStrides[axis1], result.mStrides[axis2]);
             return result;
@@ -200,8 +200,8 @@ namespace ArrayLibrary
 
         Array<T> reshape(const Coordinates &shape) const
         {
-            if (mContiguous)
-                throw std::logic_error("Cannot reshape a transposed array.");
+            if (!mContiguous)
+                throw std::logic_error("Cannot reshape a non-contiguous array.");
 
             long flatLength = 1;
             long wildcardDimension = -1;
@@ -218,13 +218,13 @@ namespace ArrayLibrary
             }
             if (wildcardDimension == -1 && flatLength == mFlatLength)
             {
-                return Array<T>(mData, shape);
+                return Array<T>(mData, shape, mOffset);
             }
             else if (wildcardDimension != -1 && flatLength <= mFlatLength && mFlatLength % flatLength == 0)
             {
                 Coordinates newShape(shape);
                 newShape[wildcardDimension] = mFlatLength / flatLength;
-                return Array<T>(mData, newShape);
+                return Array<T>(mData, newShape, mOffset);
             }
             else
                 throw std::invalid_argument("Shape does not match data size.");
@@ -486,7 +486,7 @@ namespace ArrayLibrary
 
             Data<U> data(flatLength);
             data = initial;
-            auto dest = Array<U>(data, keepDimShape, keepDimStrides);
+            auto dest = Array<U>(data, keepDimShape, keepDimStrides, 0, true);
 
             U *pDestData = dest.getDataPointer();
             T *pSourceData = getDataPointer();
