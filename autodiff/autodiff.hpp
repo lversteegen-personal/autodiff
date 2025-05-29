@@ -4,3 +4,6 @@
 #include "diff_matmul.hpp"
 #include "diff_binary_ptws.hpp"
 #include "diff_reduce.hpp"
+#include "diff_nn.hpp"
+#include "optimizer.hpp"
+#include "model.hpp"

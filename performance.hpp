@@ -34,5 +34,7 @@ struct PerformanceMeasure
 
 PerformanceMeasure mathmeasure;
 PerformanceMeasure clipMeasure;
+PerformanceMeasure passMeasure;
+PerformanceMeasure optMeasure;
 
 #endif

@@ -28,7 +28,7 @@ namespace ArrayLibrary
             friend class Data<T>;
 
         private:
-            T *mRaw;
+            T * mRaw;
             size_t mAccessCount;
             const size_t mSize;
             bool mRealeased;

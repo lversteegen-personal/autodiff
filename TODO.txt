@@ -7,5 +7,6 @@
     - More extensive version of gradientTest()
 4. More direct version of operator= for array and scalar
 5. Use preprocessor check for data alignment for debug version and platforms that do not use Microsoft C Runtime Library
-6. Give autodiff its own namespace and make namespace level factory functions for unit creation
+6. Give autodiff its own namespace, done
+    - Make namespace level factory functions for unit creation
 7. ADAM optimizer

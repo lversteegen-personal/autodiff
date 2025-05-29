@@ -1,30 +1,27 @@
 #ifndef DIFF_UNIT_H
 #define DIFF_UNIT_H
 
+#include <vector>
+
 #include "difftape.hpp"
 
-template <DataType T>
-class Reshape;
-template <DataType T>
-class ReduceSum;
-template <DataType T>
-class ReduceMean;
-template <DataType T>
-class Softmax;
-template <DataType T, typename P, T (*f)(const T, const P &), T (*df)(const T, const P &)>
-class ParamPointwise;
-
-template <DataType T>
-class Unit
+namespace AutoDiff
 {
+    long findWildcardDimension(const Coordinates &shape)
+    {
+        long wildcardDimension = -1;
+        for (long i = 0; i < shape.size(); i++)
+            if (shape[i] == -1)
+            {
+                if (wildcardDimension != -1)
+                    throw std::invalid_argument("Only one wildcard dimension allowed.");
 
-protected:
-    DiffTape<T> &mDiffTape;
-    bool mIsCaclulated = false;
-    Coordinates mWildcardShape;
-    Array<T> mArray = Array<T>::constant({}, 0);
+                wildcardDimension = i;
+            }
+        return wildcardDimension;
+    }
 
-    static BroadcastType wildcardBroadcastRelationship(const Coordinates &shape1, const Coordinates &shape2)
+    BroadcastType wildcardBroadcastRelationship(const Coordinates &shape1, const Coordinates &shape2)
     {
         long dim1 = shape1.size(), dim2 = shape2.size();
         long minDim = std::min(dim1, dim2);
@@ -85,7 +82,7 @@ protected:
         return result;
     }
 
-    static Coordinates wildcardBroadcastShape(const Coordinates &shape1, const Coordinates &shape2)
+    Coordinates wildcardBroadcastShape(const Coordinates &shape1, const Coordinates &shape2)
     {
         long dim1 = shape1.size(), dim2 = shape2.size();
         long dim = std::max(dim1, dim2);
@@ -144,139 +141,159 @@ protected:
         return result;
     }
 
-public:
-    Array<T> mGradient = Array<T>::constant({}, 0);
-    DiffTape<T> &getDiffTape() { return mDiffTape; }
-    const Array<T> &refArray() const { return mArray; }
-    const Array<T> &refGradient() const { return mGradient; }
-    const Coordinates &refArrayShape() const { return mArray.refShape(); }
-    const Coordinates &refWildcardShape() const { return mWildcardShape; }
-    const long getDim() const { return mWildcardShape.size(); }
-
-protected:
-
-    Unit(DiffTape<T> &diffTape, const Coordinates &shape) : mDiffTape(diffTape), mWildcardShape(shape)
+    bool wildcardRemovalCheck(const Coordinates &wildcardShape, const Coordinates &concreteShape)
     {
-        bool hasWildcard = false;
-        for (long i = 0; i < shape.size(); i++)
-            if (shape[i] < 0)
-            {
-                if (hasWildcard)
-                    throw std::invalid_argument("At most one wildcard dimension is allowed");
-                else
-                    hasWildcard = true;
-            }
+        if (wildcardShape.size() != concreteShape.size())
+            return false;
 
-        mDiffTape.addVariable(this);
+        for (long i = 0; i < wildcardShape.size(); i++)
+            if (wildcardShape[i] != -1 && wildcardShape[i] != concreteShape[i])
+                return false;
+
+        return true;
+    }
+
+    template <DataType T>
+    class Reshape;
+    template <DataType T>
+    class ReduceSum;
+    template <DataType T>
+    class ReduceMean;
+    template <DataType T>
+    class Softmax;
+    template <DataType T, typename P, T (*f)(const T, const P &), T (*df)(const T, const P &)>
+    class ParamPointwise;
+
+    template <DataType T>
+    class Unit
+    {
+
+    protected:
+        DiffTape<T> &mDiffTape;
+        Coordinates mWildcardShape;
+        Array<T> mArray = Array<T>::constant({}, 0);
+
+    public:
+        Array<T> mGradient = Array<T>::constant({}, 0);
+        DiffTape<T> &getDiffTape() { return mDiffTape; }
+        const Array<T> &refArray() const { return mArray; }
+        const Array<T> &refGradient() const { return mGradient; }
+        const Coordinates &refArrayShape() const { return mArray.refShape(); }
+        const Coordinates &refWildcardShape() const { return mWildcardShape; }
+        const long getDim() const { return mWildcardShape.size(); }
+        const long wildcardDim;
+
+    protected:
+        Unit(DiffTape<T> &diffTape, const Coordinates &shape) : mDiffTape(diffTape), mWildcardShape(shape), wildcardDim(findWildcardDimension(shape))
+        {
+            mDiffTape.addVariable(this);
+        }
+
+        Unit(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mWildcardShape(array.refShape()), wildcardDim(-1)        
+        {
+            mDiffTape.addVariable(this);
+        }
+
+    public:
+        Unit() = delete;
+        Unit(const Unit<T> &other) = delete;
+        Unit(Unit<T> &&other) = delete;
+
+        virtual std::vector<Unit<T> *> getDependencies() const = 0;
+        virtual void pullGradient() const = 0;
+
+        Reshape<T> &reshape(const Coordinates &newShape);
+
+        inline bool wildcardMatch(const Coordinates &shape)
+        {
+            return wildcardRemovalCheck(mWildcardShape, shape);
+        }
+
+        void resetGradient()
+        {
+            if (mArray.refShape() == mGradient.refShape())
+                mGradient = 0; // Array<T>::constant(mArray.refShape(), 0);
+            else
+                mGradient = Array<T>::constant(mArray.refShape(), 0);
+        }
+
+        virtual void calculate() {}
+
+        void initDiff()
+        {
+            mGradient = 1;
+        }
+
+        std::string to_string() const
+        {
+            return mArray.to_string();
+        }
+
+        ReduceSum<T> &reduceSum(bool keepDims = false)
+        {
+            auto axes = Coordinates(getDim());
+            for (long i = 0; i < axes.size(); i++)
+                axes[i] = i;
+
+            return *(new ReduceSum<T>(*this, axes, keepDims));
+        }
+
+        ReduceSum<T> &reduceSum(Coordinates axes, bool keepDims = false)
+        {
+            return *(new ReduceSum<T>(*this, axes, keepDims));
+        }
+
+        ReduceMean<T> &reduceMean(bool keepDims = false)
+        {
+            auto axes = Coordinates(getDim());
+            for (long i = 0; i < axes.size(); i++)
+                axes[i] = i;
+
+            return *(new ReduceMean<T>(*this, axes, keepDims));
+        }
+
+        ReduceMean<T> &reduceMean(Coordinates axes, bool keepDims = false)
+        {
+            return *(new ReduceMean<T>(*this, axes, keepDims));
+        }
+
+        Softmax<T> &softmax()
+        {
+            auto axes = Coordinates(getDim());
+            for (long i = 0; i < axes.size(); i++)
+                axes[i] = i;
+
+            return *(new Softmax<T>(*this, axes));
+        }
+
+        Softmax<T> &softmax(const Coordinates &axes)
+        {
+            return *(new Softmax<T>(*this, axes));
+        }
+
+    private:
+        inline static T leakyReLUPtws(const T value, const T &alpha)
+        {
+            return value > 0 ? value : value * alpha;
+        }
+
+        inline static T dleakyReLUPtws(const T value, const T &alpha)
+        {
+            return value > 0 ? 1 : alpha;
+        }
+
+    public:
+        Unit<T> &leakyReLu(T alpha)
+        {
+            return *(new ParamPointwise<T, T, leakyReLUPtws, dleakyReLUPtws>(*this, alpha));
+        }
     };
 
-    Unit(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mWildcardShape(array.refShape())
+    template <DataType T>
+    std::ostream &operator<<(std::ostream &s, const Unit<T> &x)
     {
-        mDiffTape.addVariable(this);
-    };
-
-    Unit(DiffTape<T> &diffTape, Array<T> &&array) : mDiffTape(diffTape), mArray(std::forward<Array<T>>(array)), mWildcardShape(array.refShape())
-    {
-        mDiffTape.addVariable(this);
-    };
-
-public:
-
-    Unit() = delete;
-    Unit(const Unit<T> &other) = delete;
-    Unit(Unit<T> &&other) = delete;
-
-    virtual void pullGradient() = 0;
-
-    Reshape<T> &reshape(const Coordinates &newShape);
-
-    void resetGradient()
-    {
-        if (mArray.refShape() == mGradient.refShape())
-            mGradient = 0; // Array<T>::constant(mArray.refShape(), 0);
-        else
-            mGradient = Array<T>::constant(mArray.refShape(), 0);
+        return s << x.to_string();
     }
-
-    virtual void calculate()
-    {
-        mIsCaclulated = true;
-    }
-
-    void initDiff()
-    {
-        mGradient = 1;
-    }
-
-    std::string to_string() const
-    {
-        return mArray.to_string();
-    }
-
-    ReduceSum<T> &reduceSum(bool keepDims = false)
-    {
-        auto axes = Coordinates(getDim());
-        for (long i = 0; i < axes.size(); i++)
-            axes[i] = i;
-
-        return *(new ReduceSum<T>(*this, axes, keepDims));
-    }
-
-    ReduceSum<T> &reduceSum(Coordinates axes, bool keepDims = false)
-    {
-        return *(new ReduceSum<T>(*this, axes, keepDims));
-    }
-
-    ReduceMean<T> &reduceMean(bool keepDims = false)
-    {
-        auto axes = Coordinates(getDim());
-        for (long i = 0; i < axes.size(); i++)
-            axes[i] = i;
-
-        return *(new ReduceMean<T>(*this, axes, keepDims));
-    }
-
-    ReduceMean<T> &reduceMean(Coordinates axes, bool keepDims = false)
-    {
-        return *(new ReduceMean<T>(*this, axes, keepDims));
-    }
-
-    Softmax<T> &softmax()
-    {
-        auto axes = Coordinates(getDim());
-        for (long i = 0; i < axes.size(); i++)
-            axes[i] = i;
-
-        return *(new Softmax<T>(*this, axes));
-    }
-
-    Softmax<T> &softmax(const Coordinates &axes)
-    {
-        return *(new Softmax<T>(*this, axes));
-    }
-
-private:
-    inline static T leakyReLUPtws(const T value, const T &alpha)
-    {
-        return value > 0 ? value : value * alpha;
-    }
-
-    inline static T dleakyReLUPtws(const T value, const T &alpha)
-    {
-        return value > 0 ? 1 : alpha;
-    }
-
-public:
-    Unit<T> &leakyReLu(T alpha)
-    {
-        return *(new ParamPointwise<T, T, leakyReLUPtws, dleakyReLUPtws>(*this, alpha));
-    }
-};
-
-template <DataType T>
-std::ostream &operator<<(std::ostream &s, const Unit<T> &x)
-{
-    return s << x.to_string();
 }
 
 #endif

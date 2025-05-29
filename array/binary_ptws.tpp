@@ -157,7 +157,7 @@ namespace ArrayLibrary
 
     template <DataType T>
     template <DataType U, U (*f)(T, T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &)>
-    Array<U> &Array<T>::binaryDestCombineDispatch(Array<U> &dest, const Array<T> &left, const Array<T> &right)
+    Array<U> &Array<T>::binaryCombineDispatch(Array<U> &dest, const Array<T> &left, const Array<T> &right)
     {
         assertm(isSubshape(left.mShape, dest.mShape), "Left array is not a subshape of the destination array.");
         assertm(isSubshape(right.mShape, dest.mShape), "Right array is not a subshape of the destination array.");
@@ -225,9 +225,9 @@ namespace ArrayLibrary
             throw std::invalid_argument("Other array is not a subshape of this array.");
 
         if (SimdVector<T>::supported)
-            return binaryDestCombineDispatch<T, f, fSimd>(*this, *this, other);
+            return binaryCombineDispatch<T, f, fSimd>(*this, *this, other);
         else
-            return binaryDestCombineDispatch<T, f, nullptr>(*this, *this, other);
+            return binaryCombineDispatch<T, f, nullptr>(*this, *this, other);
     }
 
     template <DataType T>
@@ -243,9 +243,9 @@ namespace ArrayLibrary
         auto result = Array<U>(Data<U>(calculateFlatLength(resultShape)), resultShape);
 
         if (SimdVector<U>::supported && SimdVector<T>::supported)
-            return binaryDestCombineDispatch<U, f, fSimd>(result, left, right);
+            return binaryCombineDispatch<U, f, fSimd>(result, left, right);
         else
-            return binaryDestCombineDispatch<U, f, nullptr>(result, left, right);
+            return binaryCombineDispatch<U, f, nullptr>(result, left, right);
     }
 }
 

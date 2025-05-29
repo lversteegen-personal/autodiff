@@ -28,11 +28,15 @@
 #include "simd_vector.hpp"
 
 class Test;
+int main();
 
 namespace ArrayLibrary
 {
     template <DataType T>
     class Array;
+
+    template <DataType ResultType, DataType... InputTypes>
+    class UniversalOperation;
 
     namespace Matmul
     {
@@ -46,8 +50,12 @@ namespace ArrayLibrary
     class Array
     {
         friend Test;
+        friend int main();
 
         friend ArrayLibrary::Array<T> Matmul::matmul<>(const ArrayLibrary::Array<T> &left, const ArrayLibrary::Array<T> &right, ArrayLibrary::Array<T> *const pDestArray, const ArrayLibrary::Matmul::MatmulSettings &settings);
+
+        template <DataType ResultType, DataType... InputTypes>
+        friend class UniversalOperation;
 
         template <DataType U>
         friend class Array;
@@ -78,6 +86,12 @@ namespace ArrayLibrary
         long mFlatLength;
 
     public:
+    
+        inline const T *readDataPointer() const
+        {
+            return mData.mRaw + mOffset;
+        }
+
         long getFlatLength() const { return mFlatLength; }
 
     private:
@@ -128,14 +142,14 @@ namespace ArrayLibrary
             mData[0] = single;
         }
 
-        Array(const Data<T> &data, const Coordinates &shape, const long offset=0) : mData(data), mFlatLength(calculateFlatLength(shape)), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset), mContiguous(true)
+        Array(const Data<T> &data, const Coordinates &shape, const long offset = 0) : mData(data), mFlatLength(calculateFlatLength(shape)), mShape(shape), mDim(shape.size()), mStrides(shape.size()), mOffset(offset), mContiguous(true)
         {
             calculateStrides();
         }
 
-        Array(const Data<T> &data) : mData(data), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1), mContiguous(true)  {}
+        Array(const Data<T> &data) : mData(data), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1), mContiguous(true) {}
 
-        Array(const std::vector<T> &data) : mData(data), mShape({data.size()}), mFlatLength(data.size()), mStrides({1}), mDim(1), mContiguous(true)  {}
+        Array(const std::vector<T> &data) : mData(data), mShape({data.size()}), mFlatLength(data.size()), mStrides({1}), mDim(1), mContiguous(true) {}
 
         Array(const std::initializer_list<T> &values) : mData(values), mShape({mData.size()}), mFlatLength(mData.size()), mStrides({1}), mDim(1), mContiguous(true) {}
 
@@ -316,7 +330,7 @@ namespace ArrayLibrary
         Array<U> oneHot() const
         {
             static_assert(std::is_integral<T>(), "T of Array<T> must be an integer.");
-            return oneHot<U>(Array<T>::range(reduceMin().get(0), reduceMax().get(0) + 1));
+            return oneHot<U>(Array<T>::range(reduceMin().eval(), reduceMax().eval() + 1));
         }
 
         template <typename U>
@@ -412,6 +426,7 @@ namespace ArrayLibrary
         template <DataType U>
         static inline U pow_ptw(const T a, const T b) { return (U)std::pow(a, b); }
 
+        static inline T sqrt_ptw(const T a) { return std::sqrt(a); }
         static inline T exp_ptw(const T a) { return std::exp(a); }
         static inline T sin_ptw(const T a) { return std::sin(a); }
         static inline T cos_ptw(const T a) { return std::cos(a); }
@@ -446,7 +461,7 @@ namespace ArrayLibrary
 
     private:
         template <DataType U, U (*f)(const T, const T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        static Array<U> &binaryDestCombineDispatch(Array<U> &dest, const Array<T> &left, const Array<T> &right);
+        static Array<U> &binaryCombineDispatch(Array<U> &dest, const Array<T> &left, const Array<T> &right);
 
         template <DataType U, U (*f)(const T, const T)>
         static void baseBinaryCombine(T *pLeftData, T *pRightData, U *pDestData, const Coordinates &leftShape, const Coordinates &rightShape, const Coordinates &destShape, const Coordinates &leftStrides, const Coordinates &rightStrides, const Coordinates &destStrides);
@@ -459,6 +474,12 @@ namespace ArrayLibrary
 
         template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &), bool leftSkip, bool rightSkip>
         static void simdBinaryCombine(T *pLeftData, T *pRightData, U *pDestData, const Coordinates &leftShape, const Coordinates &rightShape, const Coordinates &destShape, const Coordinates &leftStrides, const Coordinates &rightStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength);
+
+        template <T (*f)(const T, const T), SimdVector<T> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
+        Array<T> &binaryApply(const Array<T> &other);
+
+        template <DataType U, U (*f)(const T, const T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
+        static Array<U> binaryCombine(const Array<T> &left, const Array<T> &right);
 
         template <DataType U, U (*f)(const U, const T)>
         Array<U> reduce(const U &initial, const Coordinates &axes, bool keepDims = false) const
@@ -564,12 +585,6 @@ namespace ArrayLibrary
 
         template <DataType U, typename P, U (*f)(const T, const P &)>
         static Array<U> unaryParamCompute(const Array<T> &source, const P &param);
-
-        template <T (*f)(const T, const T), SimdVector<T> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        Array<T> &binaryApply(const Array<T> &other);
-
-        template <DataType U, U (*f)(const T, const T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        static Array<U> binaryCombine(const Array<T> &left, const Array<T> &right);
 
     public:
         /// @brief Returns a broadcast type stating how the two shapes can be broadcasted to match each other. If one shape has shorter dimension than the other, the shapes are aligned on the right, and the method checks whether the two shapes can broadcasted to match by adding more dimensions to the left of the shorter shape.
@@ -861,7 +876,13 @@ namespace ArrayLibrary
 
         Array<T> exp() const
         {
+            static_assert(std::is_floating_point_v<T>, "Only floating points can be exponentiated.");
             return unaryCompute<T, exp_ptw>(*this);
+        }
+
+        Array<T> sqrt() const
+        {
+            return unaryCompute<T, sqrt_ptw>(*this);
         }
 
         Array<T> sin() const
@@ -1059,6 +1080,35 @@ namespace ArrayLibrary
             return slice(at, to, keepDims);
         }
 
+        Array<T> sliceAxis(long axis, long from, long upto) const
+        {
+            if (mDim == 0)
+                throw std::invalid_argument("Cannot slice a scalar.");
+
+            if (from > mShape[axis] || from < -mShape[axis] || upto > mShape[axis] || upto < -mShape[axis])
+                throw std::invalid_argument("Bounds have to be between -shape and shape.");
+
+            axis = axis % mDim;
+            if (axis < 0)
+                axis += mDim;
+            if (from < 0)
+                from += mShape[axis];
+            if (upto < 0)
+                upto += mShape[axis];
+
+            if (from > upto)
+                throw std::invalid_argument("upto cannot be smaller than from mod shape.");
+
+            Coordinates newShape(mShape);
+            newShape[axis] = upto - from;
+            Coordinates newStrides(mStrides);
+            long flatlength = mFlatLength / mShape[axis] * newShape[axis];
+            long offset = mOffset + from * mStrides[axis];
+            bool contiguous = mContiguous;
+
+            return Array<T>(mData, newShape, newStrides, offset, contiguous);
+        }
+
         Array<T> slice(Coordinates from, Coordinates upto, bool keepDims = false) const
         {
             if (from.size() > mDim || upto.size() > mDim)
@@ -1069,7 +1119,7 @@ namespace ArrayLibrary
             Coordinates newShape(0);
             Coordinates newStrides(0);
             long flatlength = 1;
-            long offset = 0;
+            long offset = mOffset;
             bool contiguous = mContiguous;
 
             for (long i = 0; i < mDim; i++)
@@ -1132,9 +1182,6 @@ namespace ArrayLibrary
 
         T &operator[](const Coordinates indices) const { return get(indices); }
 
-        // This is too easily confused with taking a slice
-        // T &operator[](const int i) const { return get({i}); }
-
         T &get(const Coordinates indices) const
         {
             if (indices.size() != mDim)
@@ -1153,7 +1200,7 @@ namespace ArrayLibrary
             return mData[combinedIndex];
         }
 
-        T &get(long i) const
+        T &getFlat(long i) const
         {
             long k = 0;
             for (long j = mDim - 1; j >= 0; j--)
