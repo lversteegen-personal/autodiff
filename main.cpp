@@ -10,7 +10,6 @@
 #include <array>
 #include <unordered_map>
 #include <unordered_set>
-#include <string>
 #include <immintrin.h>
 #include <type_traits>
 #include <utility>
@@ -21,6 +20,7 @@
 #define LOG(x) std::cout << #x << ": \t" << x << std::endl
 #define LOG_TIME(x) std::cout << #x << ": \t" << std::chrono::duration_cast<std::chrono::microseconds>(x) << std::endl
 #define DATATYPE float
+#define DEBUG_MODE
 
 #include "save_bmp.h"
 
@@ -30,15 +30,20 @@
 #include "array/random.hpp"
 #include "data_loader.hpp"
 #include "save_bmp.h"
-#include "array/simd_vector.hpp"
-#include "tests.hpp"
+#include "tests/misc_tests.hpp"
+#include "tests/universal_operations_tests.hpp"
+#include "tests/arithmetic_tests.hpp"
+#include "tests/matmul_tests.hpp"
+#include "tests/gradient_tests.hpp"
 
 using namespace ArrayLibrary;
 using namespace ArrayLibrary::Matmul;
 using namespace AutoDiff;
 using namespace AutoDiff::NeuralNetworks;
+using namespace Simd;
+
 
 int main()
 {
-    Test::model<float>();
+    Test::mnistModel<float>();
 }

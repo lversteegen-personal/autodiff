@@ -94,7 +94,16 @@ namespace AutoDiff
         return *(new Reshape<T>(*this, newShape));
     }
 
-    template <DataType T, T (*f)(T), T (*df)(T)>
+    template <typename Operation, typename T>
+    concept IsParametrizedDifferentiableOperation = IsParametrizedOperation<typename Operation::Function, T> && IsParametrizedOperation<typename Operation::Differential, T> && requires(Operation info, Operation::Function fInfo, Operation::Differential dfInfo) {
+        requires std::is_same_v<decltype(info.param), decltype(fInfo.param)> && std::is_same_v<decltype(info.param), decltype(dfInfo.param)>;
+    };
+
+    template <typename Operation, typename T>
+    concept IsNonParametrizedDifferentiableOperation = IsNonParametrizedOperation<typename Operation::Function, T> && IsNonParametrizedOperation<typename Operation::Differential, T>;
+
+    template <typename Operation, DataType T>
+        requires IsNonParametrizedDifferentiableOperation<Operation, T>
     class Pointwise : public Unit<T>
     {
     private:
@@ -110,25 +119,26 @@ namespace AutoDiff
 
         void pullGradient() override
         {
-            mSource.mGradient += Array<T>::template unaryCompute<T, df>(mSource.mArray) * this->mGradient;
+            computeInPlace<FusedMultiplyAdd<T>, true, true, true>(mSource.mGradient, this->mGradient, compute<Operation::Differential>(mSource.mArray), mSource.mGradient);
         }
 
         void calculate() override
         {
-            this->mArray = Array<T>::template unaryCompute<T, f>(mSource.mArray);
+            ArrayLibrary::computeInPlace<Operation::Function>(this->mArray, mSource.mArray);
             Unit<T>::calculate();
         };
     };
 
-    template <DataType T, typename P, T (*f)(const T, const P &), T (*df)(const T, const P &)>
+    template <typename Operation, DataType T>
+        requires IsParametrizedDifferentiableOperation<Operation, T>
     class ParamPointwise : public Unit<T>
     {
     private:
         Unit<T> &mSource;
-        const P mParam;
+        Operation mOp;
 
     public:
-        ParamPointwise(Unit<T> &source, P param) : Unit<T>(source.getDiffTape(), source.refWildcardShape()), mSource(source), mParam(param) {}
+        ParamPointwise(Unit<T> &source, Operation opInfo) : Unit<T>(source.getDiffTape(), source.refWildcardShape()), mSource(source), mOp(opInfo) {}
 
         std::vector<Unit<T> *> getDependencies() const override
         {
@@ -137,12 +147,12 @@ namespace AutoDiff
 
         void pullGradient() const override
         {
-            mSource.mGradient += Array<T>::template unaryParamCompute<T, P, df>(mSource.refArray(), mParam) * this->mGradient;
+            computeInPlace<FusedMultiplyAdd<T>, true, true, true>(mSource.mGradient, this->mGradient, compute<typename Operation::Differential>(mOp.param, mSource.refArray()), mSource.mGradient);
         }
 
         void calculate() override
         {
-            this->mArray = Array<T>::template unaryParamCompute<T, P, f>(mSource.refArray(), mParam);
+            this->mArray = ArrayLibrary::compute<typename Operation::Function>(mOp.param, mSource.refArray());
             Unit<T>::calculate();
         };
     };

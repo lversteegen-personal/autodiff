@@ -2,6 +2,7 @@
 #define SHAPE_H
 
 #include "stack_buffer.hpp"
+#include "constants.hpp"
 #include <initializer_list>
 
 #define MAX_DIM 8ul
@@ -67,55 +68,154 @@ namespace ArrayLibrary
         return ReduceInformation(std::move(keepDimShape), std::move(keepDimStrides), std::move(reducedShape), flatLength);
     }
 
-    Coordinates findOuterShape(const std::initializer_list<Coordinates> &list)
+    template <std::same_as<Coordinates>... Shapes>
+    Coordinates findOuterShape(const Shapes &...shapes)
     {
-        if (list.size() == 0)
+        if constexpr (sizeof...(Shapes) == 0)
             return Coordinates(0);
 
-        const Coordinates *pShape = list.begin();
-        Coordinates result(*(pShape++));
+        long dim = max(shapes.size()...);
 
-        for (; pShape != list.end(); pShape++)
-        {
-            auto &shape = *pShape;
-            if (shape.size() != result.size())
-                throw std::invalid_argument("The shapes must have the same length.");
-            for (size_t i = 0; i < result.size(); i++)
-            {
-                if (shape[i] != 1)
-                {
-                    if (result[i] == 1)
-                        result[i] == shape[i];
-                    else if (result[i] != shape[i])
-                        throw std::invalid_argument("All shapes must agree in all dimensions in which they are non-trivial.");
-                }
-            }
-        }
-
-        return result;
-    }
-
-    Coordinates broadcastShape(const Coordinates &shape1, const Coordinates &shape2)
-    {
-        long dim1 = shape1.size(), dim2 = shape2.size();
-        long dim = std::max(dim1, dim2);
-        long shift1 = dim - dim1, shift2 = dim - dim2;
         Coordinates result(dim);
 
         for (long i = 0; i < dim; i++)
         {
-            if (i < shift1)
-                result[i] = shape2[i];
-            else if (i < shift2)
-                result[i] = shape1[i];
-            else if (shape1[i - shift1] == -1 || shape2[i - shift2] == -1)
-                throw std::invalid_argument("There can be at most one wildcard dimension between the two shapes.");
-            else
-                result[i] = std::max(shape1[i - shift1], shape2[i - shift2]);
+            long axisLength = max((i >= dim - shapes.size() ? shapes[i - dim + shapes.size()] : 1)...);
+            result[i] = axisLength;
+            if (!(... && (i < dim - shapes.size() || shapes[i - dim + shapes.size()] == 1 || shapes[i - dim + shapes.size()] == axisLength)))
+                throw std::invalid_argument("All shapes must agree in all dimensions in which they are non-trivial.");
         }
 
         return result;
     }
+
+    template <std::same_as<Coordinates>... Shapes>
+    bool isExtensionBroadcastable(const Shapes &...shapes)
+    {
+        long dim = max(shapes.size()...);
+        for (long i = 0; i < dim; i++)
+        {
+            long axisLength = max((i >= dim - shapes.size() ? shapes[i - dim + shapes.size()] : 1)...);
+            bool axisCheck = (... && (i < dim - shapes.size() || shapes[i - dim + shapes.size()] == 1 || shapes[i - dim + shapes.size()] == axisLength));
+
+            if (!axisCheck)
+                return false;
+        }
+
+        return true;
+    }
+
+    template <std::same_as<Coordinates>... Shapes>
+    bool isBroadcastable(const Shapes &...shapes)
+    {
+        long dim = max(shapes.size()...);
+        if ((... || (shapes.size() != dim)))
+            return false;
+
+        for (long i = 0; i < dim; i++)
+        {
+            long axisLength = max(shapes[i]...);
+            bool axisCheck = (... && (shapes[i] == 1 || shapes[i] == axisLength));
+
+            if (!axisCheck)
+                return false;
+        }
+
+        return true;
+    }
+
+    /// @brief Determines if the first argument can be made into an immediate subshape of the second argument by adding trivial axes on the left of either argument
+    /// @param subshape
+    /// @param supershape
+    /// @return
+    bool isExtensionSubshape(const Coordinates &subshape, const Coordinates &supershape)
+    {
+        if (subshape.size() > supershape.size())
+        {
+            long diff = subshape.size() - supershape.size();
+            
+            for (long i = 0; i < diff; i++)
+                if (subshape[i] != 1)
+                    return false;
+
+            for (long i = 0; i < supershape.size(); i++)
+                if (subshape[i] != 1 && subshape[i] != supershape[i])
+                    return false;
+
+            return true;
+        }
+        else
+        {
+            for (long i = 0; i < subshape.size(); i++)
+                if (subshape[i] != 1 && subshape[i] != supershape[i + supershape.size() - subshape.size()])
+                    return false;
+
+            return true;
+        }
+    }
+
+    /// @brief Determines if the first argument can be made into an immediate subshape of the second argument by adding trivial axes on the left of the first argument
+    /// @param subshape
+    /// @param supershape
+    /// @return
+    bool isHalfExtensionSubshape(const Coordinates &subshape, const Coordinates &supershape)
+    {
+        if (subshape.size() > supershape.size())
+            return false;
+
+        for (long i = 0; i < subshape.size(); i++)
+            if (subshape[i] != 1 && subshape[i] != supershape[i + supershape.size() - subshape.size()])
+                return false;
+
+        return true;
+    }
+
+    /// @brief Determines if the first argument is an immediate (i.e., without adding trivial axes) subshape of the second argument
+    /// @param subshape
+    /// @param supershape
+    /// @return
+    bool isSubshape(const Coordinates &subshape, const Coordinates &supershape)
+    {
+        if (subshape.size() != supershape.size())
+            return false;
+
+        for (long i = 0; i < subshape.size(); i++)
+            if (subshape[i] != 1 && subshape[i] != supershape[i])
+                return false;
+
+        return true;
+    }
+
+    class ShapeIterator
+    {
+        const Coordinates mShape;
+        Coordinates mPosition;
+        bool mFinished;
+
+    public:
+        ShapeIterator(const Coordinates &shape) : mShape(shape), mPosition(shape.size(), 0), mFinished(mShape == mPosition) {}
+
+        bool isFinished() const { return mFinished; }
+
+        const Coordinates &refPosition() const { return mPosition; }
+
+        const ShapeIterator &operator++()
+        {
+            for (long i = mShape.size() - 1; i >= 0; i--)
+            {
+                if (mPosition[i] == mShape[i] - 1)
+                    mPosition[i] = 0;
+                else
+                {
+                    mPosition[i]++;
+                    return *this;
+                }
+            }
+
+            mFinished = true;
+            return *this;
+        }
+    };
 }
 
 #endif

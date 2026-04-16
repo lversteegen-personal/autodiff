@@ -3,10 +3,10 @@
 
 #include "array.hpp"
 #include "array_creation.tpp"
-#include "binary_ptws.tpp"
-#include "unary_ptws.tpp"
+#include "universal_ptws.hpp"
 #include "matmul.tpp"
 #include "random.hpp"
+#include "common_operations.hpp"
 
 namespace ArrayLibrary
 {

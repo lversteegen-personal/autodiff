@@ -7,6 +7,9 @@
 
 namespace AutoDiff
 {
+    template <DataType T>
+    class Reshape;
+    
     long findWildcardDimension(const Coordinates &shape)
     {
         long wildcardDimension = -1;
@@ -19,67 +22,6 @@ namespace AutoDiff
                 wildcardDimension = i;
             }
         return wildcardDimension;
-    }
-
-    BroadcastType wildcardBroadcastRelationship(const Coordinates &shape1, const Coordinates &shape2)
-    {
-        long dim1 = shape1.size(), dim2 = shape2.size();
-        long minDim = std::min(dim1, dim2);
-        long shift1 = dim1 - minDim, shift2 = dim2 - minDim;
-        BroadcastType result = BroadcastType::MATCH;
-        bool hasWildcard = false;
-
-        for (long i = 0; i < shift1; i++)
-            if (shape1[i] != 1)
-            {
-                result &= BroadcastType::LEFTMIX;
-                if (shape1[i] == -1)
-                {
-                    if (hasWildcard)
-                        return BroadcastType::NONE;
-
-                    hasWildcard = true;
-                }
-            }
-        for (long i = 0; i < shift2; i++)
-            if (shape2[i] != 1)
-            {
-                result &= BroadcastType::RIGHTMIX;
-                if (shape2[i] == -1)
-                {
-                    if (hasWildcard)
-                        return BroadcastType::NONE;
-
-                    hasWildcard = true;
-                }
-            }
-
-        long s1, s2;
-
-        for (long i = 0; i < minDim; i++)
-        {
-            s1 = shape1[i + shift1];
-            s2 = shape2[i + shift2];
-
-            if (s1 == -1 || s2 == -1)
-            {
-                if (hasWildcard || (s1 != -1 && s1 != 1) || (s2 != -1 && s2 != 1))
-                    return BroadcastType::NONE;
-
-                hasWildcard = true;
-            }
-            else if (s1 != s2)
-            {
-                if (s1 == 1)
-                    result &= BroadcastType::RIGHTMIX;
-                else if (s2 == 1)
-                    result &= BroadcastType::LEFTMIX;
-                else
-                    return BroadcastType::NONE;
-            }
-        }
-
-        return result;
     }
 
     Coordinates wildcardBroadcastShape(const Coordinates &shape1, const Coordinates &shape2)
@@ -154,17 +96,6 @@ namespace AutoDiff
     }
 
     template <DataType T>
-    class Reshape;
-    template <DataType T>
-    class ReduceSum;
-    template <DataType T>
-    class ReduceMean;
-    template <DataType T>
-    class Softmax;
-    template <DataType T, typename P, T (*f)(const T, const P &), T (*df)(const T, const P &)>
-    class ParamPointwise;
-
-    template <DataType T>
     class Unit
     {
 
@@ -189,7 +120,7 @@ namespace AutoDiff
             mDiffTape.addVariable(this);
         }
 
-        Unit(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mWildcardShape(array.refShape()), wildcardDim(-1)        
+        Unit(DiffTape<T> &diffTape, const Array<T> &array) : mDiffTape(diffTape), mArray(array), mWildcardShape(array.refShape()), wildcardDim(-1)
         {
             mDiffTape.addVariable(this);
         }
@@ -229,64 +160,6 @@ namespace AutoDiff
             return mArray.to_string();
         }
 
-        ReduceSum<T> &reduceSum(bool keepDims = false)
-        {
-            auto axes = Coordinates(getDim());
-            for (long i = 0; i < axes.size(); i++)
-                axes[i] = i;
-
-            return *(new ReduceSum<T>(*this, axes, keepDims));
-        }
-
-        ReduceSum<T> &reduceSum(Coordinates axes, bool keepDims = false)
-        {
-            return *(new ReduceSum<T>(*this, axes, keepDims));
-        }
-
-        ReduceMean<T> &reduceMean(bool keepDims = false)
-        {
-            auto axes = Coordinates(getDim());
-            for (long i = 0; i < axes.size(); i++)
-                axes[i] = i;
-
-            return *(new ReduceMean<T>(*this, axes, keepDims));
-        }
-
-        ReduceMean<T> &reduceMean(Coordinates axes, bool keepDims = false)
-        {
-            return *(new ReduceMean<T>(*this, axes, keepDims));
-        }
-
-        Softmax<T> &softmax()
-        {
-            auto axes = Coordinates(getDim());
-            for (long i = 0; i < axes.size(); i++)
-                axes[i] = i;
-
-            return *(new Softmax<T>(*this, axes));
-        }
-
-        Softmax<T> &softmax(const Coordinates &axes)
-        {
-            return *(new Softmax<T>(*this, axes));
-        }
-
-    private:
-        inline static T leakyReLUPtws(const T value, const T &alpha)
-        {
-            return value > 0 ? value : value * alpha;
-        }
-
-        inline static T dleakyReLUPtws(const T value, const T &alpha)
-        {
-            return value > 0 ? 1 : alpha;
-        }
-
-    public:
-        Unit<T> &leakyReLu(T alpha)
-        {
-            return *(new ParamPointwise<T, T, leakyReLUPtws, dleakyReLUPtws>(*this, alpha));
-        }
     };
 
     template <DataType T>

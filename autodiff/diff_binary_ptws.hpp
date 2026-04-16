@@ -53,7 +53,7 @@ namespace AutoDiff
     public:
         Difference(Unit<T> &minuend, Unit<T> &subtrahend) : BinaryPointwiseOperation<T>(minuend, subtrahend) {}
 
-        void pullGradient() override
+        void pullGradient() const override
         {
             this->mLeft.mGradient += this->mGradient.reduceSum(this->mReductionAxesLeft, true);
             this->mRight.mGradient -= this->mGradient.reduceSum(this->mReductionAxesRight, true);
@@ -73,7 +73,7 @@ namespace AutoDiff
     public:
         Product(Unit<T> &factor1, Unit<T> &factor2) : BinaryPointwiseOperation<T>(factor1, factor2) {}
 
-        void pullGradient() override
+        void pullGradient() const override
         {
             this->mLeft.mGradient += (this->mGradient * this->mRight.refArray()).reduceSum(this->mReductionAxesLeft, true);
             this->mRight.mGradient += (this->mGradient * this->mLeft.refArray()).reduceSum(this->mReductionAxesRight, true);

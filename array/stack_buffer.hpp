@@ -166,6 +166,10 @@ public:
         return result;
     }
 
+    /// @brief Copies a subinterval from the StackBuffer and returns it
+    /// @param from The first element of the subinterval
+    /// @param upto The first element after the subinterval
+    /// @return 
     StackBuffer<T, BUFFER_SIZE> interval(long from, long upto) const
     {
         if (from < 0 || from >= mSize)
@@ -215,19 +219,21 @@ public:
         mBuffer[mSize++] = value;
     }
 
-    inline T &operator[](long i) noexcept
+    inline T &operator[](long i)
     {
 #ifdef DEBUG_MODE
-        assertm(i >= 0 && i < mSize, "The index is out of range.");
+        if (i < 0 || i >= mSize)
+            throw  std::invalid_argument("The index is out of range.");
 #endif
 
         return mBuffer[i];
     }
 
-    inline const T &operator[](long i) const noexcept
+    inline const T &operator[](long i) const
     {
 #ifdef DEBUG_MODE
-        assertm(i >= 0 && i < mSize, "The index is out of range.");
+        if (i < 0 || i >= mSize)
+            throw  std::invalid_argument("The index is out of range.");
 #endif
 
         return mBuffer[i];

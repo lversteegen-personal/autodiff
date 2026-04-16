@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <algorithm>
-#include "simd_vector.hpp"
+#include "simd.hpp"
 
 namespace ArrayLibrary
 {

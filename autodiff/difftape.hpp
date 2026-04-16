@@ -15,10 +15,9 @@
 #include <optional>
 
 #include "../array/array_library.hpp"
-#include "performance.hpp"
+#include "../performance.hpp"
 
 using namespace ArrayLibrary;
-class Test;
 
 namespace AutoDiff
 {
@@ -30,7 +29,6 @@ namespace AutoDiff
     class DiffTape
     {
         friend int main();
-        friend Test;
         static_assert(std::is_arithmetic_v<T>, "T of Array<T> must be arithmetic type!");
 
     private:

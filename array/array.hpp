@@ -22,21 +22,24 @@
 #define assertm(exp, msg) assert((void(msg), exp))
 
 #include "data.hpp"
-#include "broadcast_type.hpp"
 #include "shape.hpp"
 #include "../performance.hpp"
-#include "simd_vector.hpp"
+#include "simd.hpp"
+#include "common_operations.hpp"
 
-class Test;
 int main();
 
 namespace ArrayLibrary
 {
+
+    template <DataType T>
+    using SimdVector = Simd::Vector<T>;
+
     template <DataType T>
     class Array;
 
     template <DataType ResultType, DataType... InputTypes>
-    class UniversalOperation;
+    class UniversalPointwise;
 
     namespace Matmul
     {
@@ -46,16 +49,23 @@ namespace ArrayLibrary
         ArrayLibrary::Array<T> matmul(const ArrayLibrary::Array<T> &left, const ArrayLibrary::Array<T> &right, ArrayLibrary::Array<T> *const pDestArray, const ArrayLibrary::Matmul::MatmulSettings &settings);
     }
 
+    namespace Convolution
+    {
+        struct Settings;
+
+        template <DataType T>
+        void simpleConvolveInner(const Array<T> &dest, const Array<T> &array, const Array<T> &kernel, const Settings &settings, const Coordinates &kernelPos);
+    }
+
     template <DataType T>
     class Array
     {
-        friend Test;
         friend int main();
 
         friend ArrayLibrary::Array<T> Matmul::matmul<>(const ArrayLibrary::Array<T> &left, const ArrayLibrary::Array<T> &right, ArrayLibrary::Array<T> *const pDestArray, const ArrayLibrary::Matmul::MatmulSettings &settings);
 
         template <DataType ResultType, DataType... InputTypes>
-        friend class UniversalOperation;
+        friend class UniversalPointwise;
 
         template <DataType U>
         friend class Array;
@@ -86,7 +96,6 @@ namespace ArrayLibrary
         long mFlatLength;
 
     public:
-    
         inline const T *readDataPointer() const
         {
             return mData.mRaw + mOffset;
@@ -104,12 +113,12 @@ namespace ArrayLibrary
         long mDim;
 
     public:
-        long getDim() const { return mDim; }
+        inline long getDim() const { return mDim; }
 
     public:
-        bool isContiguous() const { return mContiguous; }
-        const Coordinates &refShape() const { return mShape; }
-        const Coordinates &refStrides() const { return mStrides; }
+        inline bool isContiguous() const { return mContiguous; }
+        inline const Coordinates &refShape() const { return mShape; }
+        inline const Coordinates &refStrides() const { return mStrides; }
 
         ~Array() = default;
 
@@ -121,12 +130,12 @@ namespace ArrayLibrary
         }
 
         template <DataType U>
-        Array(const Array<U> &other)
+        explicit Array(const Array<U> &other)
             requires std::is_convertible_v<U, T>
             : mData(other.mFlatLength),
               mFlatLength(other.mFlatLength), mShape(other.mShape), mStrides(other.mStrides), mDim(other.mDim), mOffset(other.mOffset), mContiguous(other.mContiguous)
         {
-            Array<U>::template unaryDestDispatch<T, convert<U>>(other, *this);
+            computeInPlace<Convert<T, U>>(*this, other);
         }
 
         Array(Array<T> &&other) = default;
@@ -155,13 +164,7 @@ namespace ArrayLibrary
 
         Array<T> copy() const
         {
-            if (mContiguous)
-                return Array<T>(mData.copy(mOffset, mOffset + mFlatLength), mShape, mStrides, 0, true);
-            else
-            {
-                auto result = Array<T>(Data<T>(mFlatLength), mShape, mStrides, 0, true);
-                return unaryDestDispatch<T, copy>(*this, result);
-            }
+            return compute<Copy<T>, true>(*this);
         }
 
         bool isTransposed() const { return mContiguous; }
@@ -179,10 +182,46 @@ namespace ArrayLibrary
             return result;
         }
 
+        /// @brief Adds or removes trivial axes to reshape the array to a desired dimension
+        /// @param desiredDim
+        /// @return
+        Array<T> adjustDimension(long desiredDim) const
+        {
+            if (desiredDim < 0)
+                throw std::invalid_argument("Dimension has to be non-negative");
+
+            if (desiredDim > MAX_DIM)
+                throw std::invalid_argument("The dimension cannot exceed MAX_DIM");
+
+            if (desiredDim == mDim)
+                return *this;
+
+            if (desiredDim > mDim)
+            {
+                Coordinates newShape = mShape.shiftRight(1, desiredDim - mDim);
+                Coordinates newStrides = mStrides.shiftRight(0, desiredDim - mDim);
+
+                return Array<T>(mData, newShape, newStrides, mOffset, mContiguous);
+            }
+            else
+            {
+#ifdef DEBUG_MODE
+                for (long i = 0; i < mDim - desiredDim; i++)
+                    if (mShape[i] != 1)
+                        throw std::invalid_argument("Pruning would remove non-trivial axes");
+#endif
+
+                Coordinates newShape = mShape.interval(mDim - desiredDim, mDim);
+                Coordinates newStrides = mStrides.interval(mDim - desiredDim, mDim);
+
+                return Array<T>(mData, newShape, newStrides, mOffset, mContiguous);
+            }
+        }
+
         Array<T> leftExpandDim(long addedDims) const
         {
             if (addedDims < 0)
-                throw std::invalid_argument("Number of dimensions to add has to be positive.");
+                throw std::invalid_argument("Number of dimensions to add has to be non-negative.");
 
             if (addedDims + mDim > MAX_DIM)
                 throw std::invalid_argument("The dimensionality of the resulting array would exceed MAX_DIM.");
@@ -196,7 +235,7 @@ namespace ArrayLibrary
         Array<T> rightExpandDim(long addedDims) const
         {
             if (addedDims < 0)
-                throw std::invalid_argument("Number of dimensions to add has to be positive.");
+                throw std::invalid_argument("Number of dimensions to add has to be non-negative.");
 
             if (addedDims + mDim > MAX_DIM)
                 throw std::invalid_argument("The dimensionality of the resulting array would exceed MAX_DIM.");
@@ -210,6 +249,12 @@ namespace ArrayLibrary
             }
 
             return Array<T>(mData, newShape, newStrides, mOffset, mContiguous);
+        }
+
+        template <std::convertible_to<long>... Pack>
+        Array<T> reshape(Pack... shape)
+        {
+            return reshape(Coordinates({shape...}));
         }
 
         Array<T> reshape(const Coordinates &shape) const
@@ -250,7 +295,8 @@ namespace ArrayLibrary
 
         Array<T> &operator=(const T value)
         {
-            unaryParamApply<T, assign>(value);
+            Assign<T> op(value);
+            computeInPlace<Assign<T>>(op, *this);
             return *this;
         }
 
@@ -345,71 +391,14 @@ namespace ArrayLibrary
             return Array<U>(reshape(mShape + 1) == valueRange.reshape(valueRange.mShape.shiftRight(1, mDim)));
         }
 
-    private:
-        template <DataType U, U (*f)(const T), SimdVector<U> (*fSimd)(const SimdVector<T> &) = nullptr>
-        static Array<U> &unaryDestDispatch(const Array<T> &source, Array<U> &dest);
-
-        template <DataType U, typename P, U (*f)(const T, const P &), typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &) = nullptr>
-        static Array<U> &unaryParamDestDispatch(const Array<T> &source, Array<U> &dest, const P &param, const Q &simdParam = Q());
-
-        template <DataType U, U (*f)(const T)>
-        static void baseUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides);
-
-        /// @param param The parameter is NOT passed by reference to allow the compiler to keep it in the register
-        template <DataType U, typename P, U (*f)(const T, const P &)>
-        static void baseParamUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const P param);
-
-        template <DataType U, U (*f)(const T)>
-        static inline void unaryBoost(const T *pSourceData, U *pDestData, const long length, const long sourceStride, const long destStride);
-
-        template <DataType U, typename P, U (*f)(const T, const P &)>
-        static inline void unaryParamBoost(const T *pSourceData, U *pDestData, const long length, const long sourceStride, const long destStride, const P &param);
-
-        template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &), bool sourceSkip>
-        static void simdUnary(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength);
-
-        /// @brief
-        /// @tparam Q The Simd version of the parameter
-        /// @tparam U The scalar type of the output
-        /// @tparam fSimd The Simd function operating on the data
-        /// @tparam sourceSkip Whether the source is broadcasted in the contiguous dimensions of the two arrays
-        /// @param pSourceData
-        /// @param pDestData
-        /// @param sourceShape
-        /// @param destShape
-        /// @param sourceStrides
-        /// @param destStrides
-        /// @param flatBoostDim
-        /// @param flatBoostDimLength
-        /// @param param The parameter is NOT passed by reference to allow the compiler to keep it in the register
-        template <DataType U, typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &), bool sourceSkip>
-        static void simdUnaryParam(const T *pSourceData, U *pDestData, const Coordinates &sourceShape, const Coordinates &destShape, const Coordinates &sourceStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength, const Q param);
-
-        template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &), bool sourceSkip>
-        static inline void simdUnaryBoost(const T *pSourceData, U *pDestData, const long axisLength);
-
-        template <DataType U, typename Q, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &), bool sourceSkip>
-        static inline void simdUnaryParamBoost(const T *pSourceData, U *pDestData, const long axisLength, const Q &param);
-
     public:
         static inline T add(const T a, const T b) { return a + b; }
         static inline T multiply(const T a, const T b) { return a * b; }
-        static inline T subtract(const T a, const T b) { return a - b; }
-        static inline T divide(const T a, const T b) { return a / b; }
         static inline T modulo(const T a, const T b) { return a % b; }
         static inline T max(const T a, const T b) { return a > b ? a : b; }
         static inline T min(const T a, const T b) { return a < b ? a : b; }
         static inline bool any(bool a, const T b) { return a || (b != 0); }
         static inline bool all(bool a, const T b) { return a && (b != 0); }
-        static inline T logical_and(const T a, const T b) { return a && b; }
-        static inline T logical_or(const T a, const T b) { return a || b; }
-
-        static inline bool equal(const T a, const T b) { return a == b; }
-        static inline bool notEqual(const T a, const T b) { return a != b; }
-        static inline bool less(const T a, const T b) { return a < b; }
-        static inline bool lessEqual(const T a, const T b) { return a <= b; }
-        static inline bool greater(const T a, const T b) { return a > b; }
-        static inline bool greaterEqual(const T a, const T b) { return a >= b; }
 
         template <DataType U, DataType V, U (*g)(V), V (*f)(const T)>
         static inline U compose(const T x)
@@ -422,64 +411,6 @@ namespace ArrayLibrary
         {
             return g(f(x));
         }
-
-        template <DataType U>
-        static inline U pow_ptw(const T a, const T b) { return (U)std::pow(a, b); }
-
-        static inline T sqrt_ptw(const T a) { return std::sqrt(a); }
-        static inline T exp_ptw(const T a) { return std::exp(a); }
-        static inline T sin_ptw(const T a) { return std::sin(a); }
-        static inline T cos_ptw(const T a) { return std::cos(a); }
-        static inline T abs_ptw(const T a) { return std::abs(a); }
-        static inline T copy(const T s) { return s; }
-
-        template <DataType U>
-        static inline T convert(U s)
-        {
-            return (T)s;
-        }
-
-        struct ClipBounds
-        {
-            T lowerBound;
-            T upperBound;
-            ClipBounds() = delete;
-
-            ClipBounds(T lower, T upper) : lowerBound(lower), upperBound(upper)
-            {
-                if (lowerBound > upperBound)
-                    throw new std::invalid_argument("Lower bound must be below upper bound.");
-            }
-        };
-
-        static inline T scalarClip(const T a, const ClipBounds &bounds)
-        {
-            return a < bounds.lowerBound ? bounds.lowerBound : (a > bounds.upperBound ? bounds.upperBound : a);
-        }
-
-        static inline T assign(const T dummy, const T &value) { return value; }
-
-    private:
-        template <DataType U, U (*f)(const T, const T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        static Array<U> &binaryCombineDispatch(Array<U> &dest, const Array<T> &left, const Array<T> &right);
-
-        template <DataType U, U (*f)(const T, const T)>
-        static void baseBinaryCombine(T *pLeftData, T *pRightData, U *pDestData, const Coordinates &leftShape, const Coordinates &rightShape, const Coordinates &destShape, const Coordinates &leftStrides, const Coordinates &rightStrides, const Coordinates &destStrides);
-
-        template <DataType U, U (*f)(const T, const T)>
-        static inline void binaryCombineBoost(T *pLeftData, T *pRightData, U *pDestData, const long length, const long leftStride, const long rightStride, const long destStride);
-
-        template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &), bool leftSkip, bool rightSkip>
-        static inline void simdBinaryCombineBoost(T *pLeftData, T *pRightData, U *pDestData, const long axisLength);
-
-        template <DataType U, SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &), bool leftSkip, bool rightSkip>
-        static void simdBinaryCombine(T *pLeftData, T *pRightData, U *pDestData, const Coordinates &leftShape, const Coordinates &rightShape, const Coordinates &destShape, const Coordinates &leftStrides, const Coordinates &rightStrides, const Coordinates &destStrides, const long flatBoostDim, const long flatBoostDimLength);
-
-        template <T (*f)(const T, const T), SimdVector<T> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        Array<T> &binaryApply(const Array<T> &other);
-
-        template <DataType U, U (*f)(const T, const T), SimdVector<U> (*fSimd)(const SimdVector<T> &, const SimdVector<T> &) = nullptr>
-        static Array<U> binaryCombine(const Array<T> &left, const Array<T> &right);
 
         template <DataType U, U (*f)(const U, const T)>
         Array<U> reduce(const U &initial, const Coordinates &axes, bool keepDims = false) const
@@ -568,129 +499,54 @@ namespace ArrayLibrary
         }
 
     public:
-        template <T (*f)(const T), SimdVector<T> (*fSimd)(const SimdVector<T> &) = nullptr>
-        Array<T> &unaryApply();
-
-        template <typename P, T (*f)(const T, const P &), typename Q = bool, SimdVector<T> (*fSimd)(const SimdVector<T> &, const Q &) = nullptr>
-        Array<T> &unaryParamApply(const P &param, const Q &simdParam);
-
-        template <typename P, T (*f)(const T, const P &)>
-        Array<T> &unaryParamApply(const P &param);
-
-        template <DataType U, U (*f)(const T), SimdVector<U> (*fSimd)(const SimdVector<T> &) = nullptr>
-        static Array<U> unaryCompute(const Array<T> &source);
-
-        template <DataType U, typename P, U (*f)(const T, const P &), typename Q = bool, SimdVector<U> (*fSimd)(const SimdVector<T> &, const Q &) = nullptr>
-        static Array<U> unaryParamCompute(const Array<T> &source, const P &param, const Q &simdParam);
-
-        template <DataType U, typename P, U (*f)(const T, const P &)>
-        static Array<U> unaryParamCompute(const Array<T> &source, const P &param);
-
-    public:
-        /// @brief Returns a broadcast type stating how the two shapes can be broadcasted to match each other. If one shape has shorter dimension than the other, the shapes are aligned on the right, and the method checks whether the two shapes can broadcasted to match by adding more dimensions to the left of the shorter shape.
-        /// @param shape1 First shape
-        /// @param shape2 Second shape
-        /// @return The broadcast type, see commentary of BroadcastType for explanation of flags.
-        static BroadcastType broadcastRelationship(const Coordinates &shape1, const Coordinates &shape2)
-        {
-            long dim1 = shape1.size(), dim2 = shape2.size();
-            long minDim = std::min(dim1, dim2);
-            long shift1 = dim1 - minDim, shift2 = dim2 - minDim;
-            BroadcastType result = BroadcastType::MATCH;
-
-            for (long i = 0; i < shift1; i++)
-                if (shape1[i] != 1)
-                {
-                    result &= BroadcastType::LEFTMIX;
-                    break;
-                }
-            for (long i = 0; i < shift2; i++)
-                if (shape2[i] != 1)
-                {
-                    result &= BroadcastType::RIGHTMIX;
-                    break;
-                }
-
-            for (long i = minDim - 1; i >= 0; i--)
-            {
-                if (shape1[i + shift1] != shape2[i + shift2])
-                {
-                    if (shape1[i + shift1] == 1)
-                        result &= BroadcastType::RIGHTMIX;
-                    else if (shape2[i + shift2] == 1)
-                        result &= BroadcastType::LEFTMIX;
-                    else
-                        return BroadcastType::NONE;
-                }
-            }
-
-            return result;
-        }
-
-        static bool isSubshape(const Coordinates &shape1, const Coordinates &shape2)
-        {
-            return (broadcastRelationship(shape1, shape2) & BroadcastType::RIGHT) != 0;
-        }
-
-        static bool isShapeMatch(const Coordinates &shape1, const Coordinates &shape2)
-        {
-            return (broadcastRelationship(shape1, shape2) & BroadcastType::MATCH) != 0;
-        }
-
         Array<bool> operator==(const Array<T> &other) const
         {
-            return binaryCombine<bool, equal>(*this, other);
+            return compute<Equality<T>>(*this, other);
         }
 
         Array<bool> operator!=(const Array<T> &other) const
         {
-            return binaryCombine<bool, notEqual>(*this, other);
+            return compute<Inequality<T>>(*this, other);
         }
 
         Array<bool> operator<(const Array<T> &other) const
         {
-            return binaryCombine<bool, less>(*this, other);
+            return compute<LessThan<T>>(*this, other);
         }
 
         Array<bool> operator<=(const Array<T> &other) const
         {
-            return binaryCombine<bool, lessEqual>(*this, other);
+            return compute<LessThanEqual<T>>(*this, other);
         }
 
         Array<bool> operator>(const Array<T> &other) const
         {
-            return binaryCombine<bool, greater>(*this, other);
+            return compute<LessThan<T>>(other, *this);
         }
 
         Array<bool> operator>=(const Array<T> &other) const
         {
-            return binaryCombine<bool, greaterEqual>(*this, other);
+            return compute<LessThanEqual<T>>(other, *this);
         }
 
         Array<T> operator&&(const Array<T> &other) const
         {
-            return binaryCombine<T, logical_and>(*this, other);
+            return compute<LogicalAnd<T>>(*this, other);
         }
 
         Array<T> operator||(const Array<T> &other) const
         {
-            return binaryCombine<T, logical_or>(*this, other);
+            return compute<LogicalOr<T>>(*this, other);
         }
 
         Array<T> &operator+=(const Array<T> &other)
         {
-            if (SimdVector<T>::supported)
-                return binaryApply<add, SimdVector<T>::add>(other);
-            else
-                return binaryApply<add>(other);
+            return computeInPlace<Addition<T>>(*this, *this, other);
         }
 
         Array<T> operator+(const Array<T> &other) const
         {
-            if (SimdVector<T>::supported)
-                return binaryCombine<T, add, SimdVector<T>::add>(*this, other);
-            else
-                return binaryCombine<T, add>(*this, other);
+            return compute<Addition<T>>(*this, other);
         }
 
         Array<T> &operator+=(const T other)
@@ -705,18 +561,12 @@ namespace ArrayLibrary
 
         Array<T> &operator*=(const Array<T> &other)
         {
-            if (SimdVector<T>::supported)
-                return binaryApply<multiply, SimdVector<T>::multiply>(other);
-            else
-                return binaryApply<multiply>(other);
+            return computeInPlace<Multiplication<T>>(*this, *this, other);
         }
 
         Array<T> operator*(const Array<T> &other) const
         {
-            if (SimdVector<T>::supported)
-                return binaryCombine<T, multiply, SimdVector<T>::multiply>(*this, other);
-            else
-                return binaryCombine<T, multiply>(*this, other);
+            return compute<Multiplication<T>>(*this, other);
         }
 
         Array<T> &operator*=(const T other)
@@ -731,18 +581,12 @@ namespace ArrayLibrary
 
         Array<T> &operator-=(const Array<T> &other)
         {
-            if (SimdVector<T>::supported)
-                return binaryApply<subtract, SimdVector<T>::subtract>(other);
-            else
-                return binaryApply<subtract>(other);
+            return computeInPlace<Subtraction<T>>(*this, *this, other);
         }
 
         Array<T> operator-(const Array<T> &other) const
         {
-            if (SimdVector<T>::supported)
-                return binaryCombine<T, subtract, SimdVector<T>::subtract>(*this, other);
-            else
-                return binaryCombine<T, subtract>(*this, other);
+            return compute<Subtraction<T>>(*this, other);
         }
 
         Array<T> &operator-=(const T &other)
@@ -757,18 +601,12 @@ namespace ArrayLibrary
 
         Array<T> &operator/=(const Array<T> &other)
         {
-            if (SimdVector<T>::supported)
-                return binaryApply<divide, SimdVector<T>::divide>(other);
-            else
-                return binaryApply<divide>(other);
+            return computeInPlace<Division<T>>(*this, *this, other);
         }
 
         Array<T> operator/(const Array<T> &other) const
         {
-            if (SimdVector<T>::supported)
-                return binaryCombine<T, divide, SimdVector<T>::divide>(*this, other);
-            else
-                return binaryCombine<T, divide>(*this, other);
+            return compute<Division<T>>(*this, other);
         }
 
         Array<T> &operator/=(const T other)
@@ -784,7 +622,7 @@ namespace ArrayLibrary
         Array<T> operator%(const Array<T> &other) const
         {
             static_assert(std::is_integral_v<T>, "Modulo operator is only defined for integral types.");
-            return binaryCombine<T, modulo>(*this, other);
+            return compute<Modulo>(*this, other);
         }
 
     private:
@@ -795,13 +633,13 @@ namespace ArrayLibrary
         Array<bool> isNaN() const
         {
             static_assert(std::is_floating_point_v<T>, "Only floating points can be NaN.");
-            return unaryCompute<bool, std::isnan>(*this);
+            return compute<IsNan<T>>(*this);
         }
 
         Array<bool> isInf() const
         {
             static_assert(std::is_floating_point_v<T>, "Only floating points can be Inf.");
-            return unaryCompute<bool, std::isinf>(*this);
+            return compute<IsInf<T>>(*this);
         }
 
         bool checkNumerics() const
@@ -848,72 +686,67 @@ namespace ArrayLibrary
             return findWhere<find_isNonZero>();
         }
 
+        // I know, I know, this is probably not worth it
+        Array<T> intPow(const unsigned int k) const
+        {
+            if (k == 0)
+                return Array<T>::constant(mShape, 1);
+
+            if (k == 1)
+                return copy();
+
+            if (k == 2)
+                return compute<IntPow<T, 2>>(*this);
+
+            if (k == 3)
+                return compute<IntPow<T, 3>>(*this);
+
+            if (k == 4)
+                return compute<IntPow<T, 4>>(*this);
+
+            return this->pow(Array<T>(k));
+        }
+
         Array<T> square() const
         {
             return (*this) * (*this);
         }
 
-        Array<T> intPow(const unsigned int k) const
-        {
-            if (k > 4)
-                return this->pow((double)k);
-
-            auto resultData = Data<T>(mFlatLength);
-            resultData = 1;
-
-            for (long i = 0; i < getFlatLength(); i++)
-                for (long j = 0; j < k; j++)
-                    resultData[i] *= mData[i];
-
-            return Array<T>(resultData, mShape);
-        }
-
     public:
         Array<T> pow(const Array<T> &other) const
         {
-            return binaryCombine<T, pow_ptw<T>>(*this, other);
+            return compute<Pow<T, T>>(*this, other);
         }
 
         Array<T> exp() const
         {
             static_assert(std::is_floating_point_v<T>, "Only floating points can be exponentiated.");
-            return unaryCompute<T, exp_ptw>(*this);
+            return compute<Exp<T>>(*this);
         }
 
         Array<T> sqrt() const
         {
-            return unaryCompute<T, sqrt_ptw>(*this);
+            return compute<Sqrt<T>>(*this);
         }
 
         Array<T> sin() const
         {
-            return unaryCompute<T, sin_ptw>(*this);
+            return compute<Sin<T>>(*this);
         }
 
         Array<T> cos() const
         {
-            return unaryCompute<T, cos_ptw>(*this);
+            return compute<Cos<T>>(*this);
         }
 
         Array<T> abs() const
         {
-            return unaryCompute<T, abs_ptw>(*this);
-        }
-
-        Array<T> clip(ClipBounds bounds) const
-        {
-            if (SimdVector<T>::supported)
-                return unaryParamCompute<T, ClipBounds, scalarClip, SimdClipBounds<T>, SimdVector<T>::clip>(*this, bounds, SimdClipBounds(bounds.lowerBound, bounds.upperBound));
-            else
-                return unaryParamCompute<T, ClipBounds, scalarClip>(*this, bounds);
+            return compute<Abs<T>>(*this);
         }
 
         Array<T> clip(T lower, T upper) const
         {
-            if (SimdVector<T>::supported)
-                return unaryParamCompute<T, ClipBounds, scalarClip, SimdClipBounds<T>, SimdVector<T>::clip>(*this, ClipBounds(lower, upper), SimdClipBounds(lower, upper));
-            else
-                return unaryParamCompute<T, ClipBounds, scalarClip>(*this, ClipBounds(lower, upper));
+            return compute<Clip<T>>(Clip(lower, upper), *this);
         }
 
         Array<T> reduceSum(const Coordinates &axes, bool keepDims = false) const
@@ -1174,15 +1007,12 @@ namespace ArrayLibrary
 
         T eval() const
         {
-            if (mFlatLength != 0)
-                std::logic_error("Array has more than one entry.");
-
             return *getDataPointer();
         }
 
         T &operator[](const Coordinates indices) const { return get(indices); }
 
-        T &get(const Coordinates indices) const
+        T &get(const Coordinates &indices) const
         {
             if (indices.size() != mDim)
                 throw std::invalid_argument("The index tuple does not match the array shape");
@@ -1209,7 +1039,7 @@ namespace ArrayLibrary
                 i /= mShape[j];
             }
 
-            return mData[k];
+            return mData[k + mOffset];
         }
 
         std::string to_string() const

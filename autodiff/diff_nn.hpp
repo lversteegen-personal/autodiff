@@ -12,12 +12,185 @@
 #include "diff_basic.hpp"
 #include "optimizer.hpp"
 
-class Test;
-
 namespace AutoDiff
 {
     namespace NeuralNetworks
     {
+        template <DataType T>
+        class Softmax : public Unit<T>
+        {
+        private:
+            Unit<T> &mSource;
+            const Coordinates mAxes;
+
+        public:
+            Softmax(Unit<T> &source, const Coordinates &axes) : mSource(source), mAxes(axes), Unit<T>(source.getDiffTape(), source.refWildcardShape()) {}
+
+            std::vector<Unit<T> *> getDependencies() const override
+            {
+                return {&mSource};
+            }
+
+            void pullGradient() const override
+            {
+                Array<T> centered = mSource.refArray() - mSource.refArray().reduceMax(mAxes, true);
+                Array<T> expd = centered.exp();
+                Array<T> norm = expd.reduceSum(mAxes, true);
+                auto &g = this->mGradient;
+                Array<T> prod = (expd * g);
+
+                mSource.mGradient += (prod - expd * prod.reduceSum(mAxes, true) / norm) / norm;
+            }
+
+            void calculate() override
+            {
+                Array<T> centered = mSource.refArray() - mSource.refArray().reduceMax(mAxes, true);
+                Array<T> expd = centered.exp();
+                this->mArray = expd / expd.reduceSum(mAxes, true);
+                Unit<T>::calculate();
+            };
+        };
+
+        template <DataType T>
+        Softmax<T> &softmax(Unit<T> &unit)
+        {
+            auto axes = Coordinates(unit.getDim());
+            for (long i = 0; i < axes.size(); i++)
+                axes[i] = i;
+
+            return *(new Softmax<T>(unit, axes));
+        }
+
+        template <DataType T>
+        Softmax<T> &softmax(Unit<T> &unit, const Coordinates &axes)
+        {
+            return *(new Softmax<T>(unit, axes));
+        }
+
+        template <DataType T>
+        class Softermax : public Unit<T>
+        {
+        private:
+            Unit<T> &mSource;
+            const Coordinates mAxes;
+
+        public:
+            Softermax(Unit<T> &source, const Coordinates &axes) : mSource(source), mAxes(axes), Unit<T>(source.getDiffTape(), source.refWildcardShape())
+            {
+            }
+
+            static Softermax<T> &create(Unit<T> &source, const Coordinates &axes)
+            {
+                return *(new Softermax<T>(source, axes));
+            }
+
+            std::vector<Unit<T> *> getDependencies() const override
+            {
+                return {&mSource};
+            }
+
+            struct Function
+            {
+                static inline T f(const T x)
+                {
+                    constexpr T ONE = static_cast<T>(1);
+                    constexpr T TWO = static_cast<T>(2);
+                    return x < ONE ? ONE / (TWO - x) : x * x * x;
+                }
+            };
+
+            struct Differential
+            {
+                static inline T f(const T x)
+                {
+                    constexpr T ONE = static_cast<T>(1);
+                    constexpr T TWO = static_cast<T>(2);
+                    return x < ONE ? ONE / ((TWO - x) * (TWO - x)) : 3 * x * x;
+                }
+            };
+
+            void pullGradient() const override
+            {
+                Array<T> tmp = compute<Function>(mSource.refArray());
+                Array<T> dTmp = compute<Differential>(mSource.refArray());
+                Array<T> norm = tmp.reduceSum(mAxes, true);
+                auto &g = this->mGradient;
+                Array<T> innerProd = (tmp * g).reduceSum(mAxes, true);
+
+                struct LocalComp
+                {
+                    static inline T f(const T a, const T b, const T c, const T d, const T e)
+                    {
+                        return a + b * (c - d / e) / e;
+                    }
+
+                    static inline Simd::Vector<T> fSimd(const Simd::Vector<T> a, const Simd::Vector<T> b, const Simd::Vector<T> c, const Simd::Vector<T> d, const Simd::Vector<T> e)
+                    {
+                        return a + b * (c - d / e) / e;
+                    }
+                };
+
+                computeInPlace<LocalComp>(mSource.mGradient, mSource.mGradient, dTmp, g, innerProd, norm);
+            }
+
+            void calculate() override
+            {
+
+                Array<T> tmp = compute<Function>(mSource.refArray());
+                this->mArray = tmp / tmp.reduceSum(mAxes, true);
+                Unit<T>::calculate();
+            }
+        };
+
+        template <DataType T>
+            requires std::is_floating_point_v<T>
+        struct LeakyReLU
+        {
+            T param;
+            LeakyReLU(const T &alpha) : param(alpha) {}
+
+            struct Function
+            {
+                T param;
+                Simd::Vector<T> simdParam;
+                Function(const T &alpha) : param(alpha), simdParam(Simd::broadcast_set(alpha)) {}
+
+                static inline T f(const T &alpha, const T input)
+                {
+                    return input > 0 ? input : input * alpha;
+                }
+
+                static inline Simd::Vector<T> fSimd(const Simd::Vector<T> &alpha, const Simd::Vector<T> input)
+                {
+                    return Simd::max<T>(input, Simd::zero<T>()) + Simd::min<T>(input * alpha, Simd::zero<T>());
+                }
+            };
+
+            struct Differential
+            {
+                T param;
+                Simd::Vector<T> simdParam;
+
+                Differential(const T &alpha) : param(alpha), simdParam(Simd::broadcast_set(alpha)) {}
+
+                static inline T f(const T &alpha, const T input)
+                {
+                    return input > 0 ? 1 : alpha;
+                }
+
+                static inline Simd::Vector<T> fSimd(const Simd::Vector<T> &alpha, const Simd::Vector<T> input)
+                {
+                    return Simd::step<T>(input, alpha, Simd::broadcast_set<T>(1));
+                }
+            };
+        };
+
+        template <DataType T>
+        Unit<T> &leakyReLu(Unit<T> &unit, T alpha)
+        {
+            return *(new ParamPointwise<LeakyReLU<T>, T>(unit, alpha));
+        }
+
         RandomArrayGenerator randomArrayGenerator = RandomArrayGenerator(0);
 
         template <DataType T>
@@ -103,8 +276,8 @@ namespace AutoDiff
                 P activationParam;
                 T clipBound = 1;
 
-                Coefficients<T> *pWeightMatrix = nullptr;
-                Coefficients<T> *pBiasVector = nullptr;
+                Coefficients<T> *pKernel = nullptr;
+                Coefficients<T> *pBias = nullptr;
 
                 long nodes = 0;
 
@@ -115,20 +288,20 @@ namespace AutoDiff
                 {
                 }
 
-                Settings(Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation = Activation::None, P activationParam = P()) : nodes(weightMatrix.refWildcardShape()[weightMatrix.refWildcardShape().size() - 2]), pWeightMatrix(&weightMatrix), pBiasVector(&biasVector), activation(activation), activationParam(activationParam), hasCoefficients(true)
+                Settings(Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Activation activation = Activation::None, P activationParam = P()) : nodes(weightMatrix.refWildcardShape()[weightMatrix.refWildcardShape().size() - 2]), pKernel(&weightMatrix), pBias(&biasVector), activation(activation), activationParam(activationParam), hasCoefficients(true)
                 {
                 }
             };
 
         private:
-            friend class Test;
-
-        private:
             Unit<T> &mInput;
-            Coefficients<T> &mWeightMatrix;
-            Coefficients<T> &mBiasVector;
+            Coefficients<T> &mKernel;
+            Coefficients<T> &mBias;
 
         public:
+            const Coefficients<T> &refKernel() const { return mKernel; }
+            const Coefficients<T> &refBias() const { return mBias; }
+
             Unit<T> &output;
 
             operator Unit<T> &()
@@ -136,7 +309,7 @@ namespace AutoDiff
                 return output;
             }
 
-            LinearLayer(Unit<T> &input, Coefficients<T> &weightMatrix, Coefficients<T> &biasVector, Unit<T> &output) : mInput(input), mWeightMatrix(weightMatrix), mBiasVector(biasVector), output(output)
+            LinearLayer(Unit<T> &input, Coefficients<T> &kernel, Coefficients<T> &bias, Unit<T> &output) : mInput(input), mKernel(kernel), mBias(bias), output(output)
             {
             }
 
@@ -144,8 +317,8 @@ namespace AutoDiff
             template <typename P>
             static LinearLayer<T> create(Unit<T> &input, Settings<P> settings)
             {
-                Coefficients<T> *pWeightMatrix = settings.pWeightMatrix;
-                Coefficients<T> *pBiasVector = settings.pBiasVector;
+                Coefficients<T> *pKernel = settings.pKernel;
+                Coefficients<T> *pBias = settings.pBias;
 
                 if (!settings.hasCoefficients)
                 {
@@ -168,31 +341,31 @@ namespace AutoDiff
                     else
                         rawWeights = Array<T>::constant({nodes, inputLength}, 0);
 
-                    pWeightMatrix = &Coefficients<T>::create(input.getDiffTape(), rawWeights);
-                    pBiasVector = &Coefficients<T>::create(input.getDiffTape(), Array<T>::constant({settings.nodes}, 0));
+                    pKernel = &Coefficients<T>::create(input.getDiffTape(), rawWeights);
+                    pBias = &Coefficients<T>::create(input.getDiffTape(), Array<T>::constant({settings.nodes}, 0));
                 }
                 else
                 {
-                    if (settings.pWeightMatrix == nullptr || settings.pBiasVector == nullptr)
+                    if (settings.pKernel == nullptr || settings.pBias == nullptr)
                         throw std::invalid_argument("Weight matrix and bias vector must be provided if hasCoefficients is true.");
-                    if (settings.pWeightMatrix->refWildcardShape().get(-2) != settings.nodes)
+                    if (settings.pKernel->refWildcardShape().get(-2) != settings.nodes)
                         throw std::invalid_argument("Weight matrix must have the same number of rows as the number of nodes.");
-                    if (settings.pWeightMatrix->refWildcardShape().get(-1) != input.refWildcardShape().get(-1))
+                    if (settings.pKernel->refWildcardShape().get(-1) != input.refWildcardShape().get(-1))
                         throw std::invalid_argument("Weight matrix must have the same number of columns as the input length.");
-                    if (settings.pBiasVector->refWildcardShape().get(-1) != settings.nodes)
+                    if (settings.pBias->refWildcardShape().get(-1) != settings.nodes)
                         throw std::invalid_argument("Bias vector must have the same number of elements as the number of nodes.");
                 }
 
-                Sum<T> &intermediate = matvecmul(*pWeightMatrix, input) + *pBiasVector;
+                Sum<T> &intermediate = matvecmul(*pKernel, input) + *pBias;
                 switch (settings.activation)
                 {
                 case Activation::NONE:
-                    return LinearLayer<T>(input, *pWeightMatrix, *pBiasVector, intermediate);
+                    return LinearLayer<T>(input, *pKernel, *pBias, intermediate);
 
                 case Activation::LEAKYRELU:
                     if (!std::is_same_v<T, P>)
                         throw std::invalid_argument("The activation parameter for leaky relu activation in a layer of type T must also be of type T");
-                    return LinearLayer<T>(input, *pWeightMatrix, *pBiasVector, intermediate.leakyReLu(settings.activationParam));
+                    return LinearLayer<T>(input, *pKernel, *pBias, leakyReLu(intermediate, settings.activationParam));
 
                 default:
                     throw std::invalid_argument("Unsupported activation function.");
@@ -211,8 +384,8 @@ namespace AutoDiff
 
             void applyGradient(DiffTape<T> &diffTape, Unit<T> &target, T learningRate, T clipValue)
             {
-                auto &weightGradient = mWeightMatrix.refGradient();
-                auto &biasGradient = mBiasVector.refGradient();
+                auto &weightGradient = mKernel.refGradient();
+                auto &biasGradient = mBias.refGradient();
 
                 mathmeasure.start();
                 auto tmpMat = (weightGradient * learningRate);
@@ -225,8 +398,8 @@ namespace AutoDiff
                 clipMeasure.stop();
 
                 mathmeasure.start();
-                mWeightMatrix.refCoefficientArray() -= tmpMat;
-                mBiasVector.refCoefficientArray() -= tmpBias;
+                mKernel.refCoefficientArray() -= tmpMat;
+                mBias.refCoefficientArray() -= tmpBias;
                 mathmeasure.stop();
             }
 

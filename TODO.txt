@@ -10,3 +10,5 @@
 6. Give autodiff its own namespace, done
     - Make namespace level factory functions for unit creation
 7. ADAM optimizer
+    - Done
+8. Replacing packGet<k> with pack indexing when moving back to C++26

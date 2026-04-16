@@ -1,65 +1,17 @@
-#include <iostream>
-#include <cmath>
-#include <vector>
-#include <string>
-#include <initializer_list>
-#include <stdexcept>
-#include <cstdarg>
-#include <cstdlib>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <string>
-#include <immintrin.h>
-#include <type_traits>
-#include <utility>
-#include <memory>
-#include <bitset>
+#ifndef MISC_TESTS_H
+#define MISC_TESTS_H
 
-#include "save_bmp.h"
-
-#include "array/array_library.hpp"
-#include "autodiff/autodiff.hpp"
-#include "autodiff/diff_nn.hpp"
-#include "array/random.hpp"
-#include "data_loader.hpp"
-#include "save_bmp.h"
-#include "array/simd_vector.hpp"
-
-#define assertm(exp, msg) assert((void(msg), exp))
-#define LOG(x) std::cout << #x << ": \t" << x << std::endl
-#define LOG_TIME(x) std::cout << #x << ": \t" << std::chrono::duration_cast<std::chrono::microseconds>(x) << std::endl
-#define DATATYPE float
-
-#define DEBUG_MODE
+#include "test_util.hpp"
 
 using namespace ArrayLibrary;
 using namespace ArrayLibrary::Matmul;
 using namespace AutoDiff;
 using namespace AutoDiff::NeuralNetworks;
 
-template <typename T>
-std::ostream &operator<<(std::ostream &s, const std::vector<T> &v)
+namespace Test
 {
-    s.put('[');
-    for (char comma[]{'\0', ' ', '\0'}; const T &e : v)
-        s << comma << e, comma[0] = ',';
-    return s << "]";
-}
-
-class Test
-{
-public:
     template <DataType T>
-    static bool approxEqual(T v1, T v2, T eps = 1e-3)
-    {
-        auto max = std::max(std::abs(v1), std::abs(v2));
-        max = max < 1 ? 1 : max;
-        return std::abs(v2 - v1) / max < eps;
-    }
-
-    template <DataType T>
-    static void matmulPerfShape()
+    void matmulPerfShape()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         PerformanceMeasure shortProductAxisMeasure;
@@ -95,8 +47,8 @@ public:
         LOG_TIME(longProductAxisMeasure.accumulated);
     }
 
-        template <DataType T>
-    static void outerProductPerf()
+    template <DataType T>
+    void outerProductPerf()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         auto A = randomArrayGenerator.normal<T>({4096, 1}, 0, 1);
@@ -120,7 +72,7 @@ public:
     }
 
     template <DataType T>
-    static void reducePerf()
+    void reducePerf()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         auto A = randomArrayGenerator.normal<T>({4096, 1}, 0, 1);
@@ -146,8 +98,8 @@ public:
         LOG_TIME(reduceMeasure.accumulated);
     }
 
-        template <DataType T>
-    static void concurrencyTest()
+    template <DataType T>
+    void concurrencyTest()
     {
         PerformanceMeasure concMeasure;
         PerformanceMeasure singleMeasure;
@@ -171,245 +123,15 @@ public:
         std::cout << singleMeasure.accumulated << std::endl;
     }
 
-    static void printingTest()
+    void printingTest()
     {
         auto A = Array<int>::range(18).reshape({3, 2, 3});
         std::cout << A << std::endl;
     }
 
-    template <DataType T>
-    static T checksum(const Array<T> &arr)
-    {
-        auto flatlength = arr.getFlatLength();
-        auto checksumVector = Array<DATATYPE>::range(flatlength).reshape(arr.refShape()).cos();
-        return (arr * checksumVector).reduceSum().eval();
-    }
-
-    template <DataType T, T (*f)(T)>
-    static Array<T> generatePseudorandom(Coordinates shape)
-    {
-        long flatLength = 1;
-        for (int i = 0; i < shape.size(); i++)
-            flatLength *= shape[i];
-
-        Array<T> arr = Array<T>::range(flatLength).template unaryApply<Array<T>::template compose<Array<T>::sin_ptw, f>>();
-        return arr.reshape(shape);
-    }
 
     template <DataType T>
-    static void gradientTest()
-    {
-        auto layer1WeightsBare = Array<T>::range(1000).reshape({10, 100}).square().sin();
-        auto layer1BiasBare = Array<T>::range(10).square().sin();
-
-        DiffTape<T> diffTape = DiffTape<T>();
-        auto &input = Variables<T>::create(diffTape, {-1, 100});
-        auto &labels = Variables<T>::create(diffTape, {-1, 10});
-        auto &layer1Weights = Coefficients<T>::create(diffTape, layer1WeightsBare);
-        auto &layer1Bias = Coefficients<T>::create(diffTape, layer1BiasBare);
-
-        auto &layer1Pre = matvecmul(layer1Weights, input);
-        auto &layer1 = layer1Pre + layer1Bias;
-        auto &sftm = layer1.softmax({-1});
-        auto &dist = sftm - labels;
-        auto &prod = dist * dist;
-        auto &cost = prod.reduceSum();
-
-        T learningRate = 1e-3;
-
-        input.setValue(Array<T>::range(100).reshape({1, 100}).intPow(3).sin());
-        labels.setValue(Array<T>::range(10).reshape({1, 10}).intPow(4).sin());
-
-        diffTape.calculateAll(cost);
-
-        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1Pre, &layer1, &sftm, &dist, &prod, &cost};
-        T targets[] = {
-            1.571174239198852, -1.1359495664045085, 2.6065913261879787, 5.764624310437291, 29.770156227548874, -1.5742356314680626, -0.7190281841725917, -1.2722775033062013, -2.4253578383577237, -1.2722775033062013, -3.1443860356687523, -1.2722775033062013, -0.2757208861519817, -5.764624310437291, -2.8823121552186457, -5.764624310437291, -1.8356536757736093, 0.42162378262054656, 6.659353256225586, 1.0};
-
-        for (int i = 0; i < units.size(); i++)
-        {
-            assert(approxEqual(checksum(units[i]->refArray()), targets[2 * i]));
-            assert(approxEqual(checksum(units[i]->refGradient()), targets[2 * i + 1]));
-        }
-
-        std::cout << "Gradient test successful." << std::endl;
-    }
-
-    template <DataType T>
-    static void gradientTest2()
-    {
-
-        using LayerSettings = LinearLayer<T>::template Settings<T>;
-        using Activation = LinearLayer<T>::Activation;
-
-        DiffTape<T> diffTape = DiffTape<T>();
-        auto &input = Variables<T>::create(diffTape, {-1, 784});
-        auto &labels = Variables<T>::create(diffTape, {-1, 10});
-
-        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return x; }>({200, 784}));
-        auto &layer1Bias = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                  { return 3 * x * x; }>({200}));
-
-        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
-
-        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return 11 * x; }>({10, 200}));
-        auto &layer2Bias = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                  { return 3 * x * x + 17 * x; }>({10}));
-        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
-
-        auto &sftm = layer2.output.softmax({-1});
-        auto &cost = MeanSquaredError<T>::create(sftm, labels);
-
-        input.setValue(generatePseudorandom<T, [](T x)
-                                            { return 7 * x; }>({16, 784}));
-        labels.setValue(generatePseudorandom<T, [](T x)
-                                             { return 13 * x * x * x + 2 * x; }>({16, 10}));
-
-        diffTape.calculateAll(cost);
-
-        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost};
-        T targets[] = {-2.244379721624708, 43.50746962845771, -0.05304572445633804, -0.30693305592170655, 0.015767526079134953, 1.086805486745606, -13.121347531406986, 0.11099250483283919, 9.453542428028797, 0.010960845784722312, -0.9414516503052217, -0.996517497385196, 0.33048479830788235, -0.0030711601738893594, 146.8347763513801, -0.0727055500100524, 1.4816195117838626, 0.30693305592170655, 9.40982437133789, 1.0};
-
-        for (int i = 0; i < units.size(); i++)
-        {
-            assert(approxEqual(checksum(units[i]->refArray()), targets[2 * i]));
-        }
-
-        for (int i = 0; i < units.size(); i++)
-        {
-            assert(approxEqual(checksum(units[i]->refGradient()), targets[2 * i + 1]));
-        }
-
-        std::cout << "Gradient test successful." << std::endl;
-    }
-
-    template <DataType T>
-    static void gradientTestMnist()
-    {
-        auto mnist = Loader<T>::loadMNIST(0x4000);
-        Array<T> images(mnist.data.reshape({-1, 784}));
-        images /= 255;
-        auto onehot = mnist.label.template oneHot<T>();
-
-        using LayerSettings = LinearLayer<T>::template Settings<T>;
-        using Activation = LinearLayer<T>::Activation;
-
-        DiffTape<T> diffTape = DiffTape<T>();
-        auto &input = Variables<T>::create(diffTape, {-1, 784});
-        auto &labels = Variables<T>::create(diffTape, {-1, 10});
-
-        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return x * x; }>({200, 784}) *
-                                                                    std::sqrt(6.0 / (784 + 200)));
-        auto &layer1Bias = Coefficients<T>::create(diffTape, Array<T>::constant({200}, 0));
-
-        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
-
-        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return x * x; }>({10, 200}) *
-                                                                    std::sqrt(6.0 / (200 + 10)));
-        auto &layer2Bias = Coefficients<T>::create(diffTape, Array<T>::constant({10}, 0));
-
-        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
-
-        auto &sftm = layer2.output.softmax({-1});
-        auto &cost = MeanSquaredError<T>::create(sftm, labels);
-
-        input.setValue(mnist.data.slice({0}, {16}));
-        labels.setValue(onehot.slice({0}, {16}));
-
-        diffTape.calculateAll(cost);
-
-        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost};
-        T targets1[] = {-0.3967533457503727, -0.008208444253053601, -0.8704844306745688, -0.29677117442197276, 27.574123520337626, -0.03632134417143752, 0.0, -0.10300240543684935, 17.481087726477313, -0.025083196563216396, 11.299552865185444, 0.22366353266626227, 0.0, 0.05524654861660283, 5.217154828019423, 0.05343362330526041, 0.6133714012233566, 0.29677117442197276, 1.4584695100784302, 1.0};
-
-        for (int i = 0; i < units.size(); i++)
-        {
-            std::cout << "Unit " << i << " (" << typeid(*(units[i])).name() << ")" << std::endl;
-            LOG(units[i]->refWildcardShape());
-            assert(approxEqual(checksum(units[i]->refArray()), targets1[2 * i]));
-            assert(approxEqual(checksum(units[i]->refGradient()), targets1[2 * i + 1]));
-        }
-
-        T targets2[] = {27.5741601085202, 0.00010300241060871736, 11.29932905014783, -5.524654736614849e-05};
-
-        layer1.applyGradient(diffTape, cost, 1e-3, 1000);
-        layer2.applyGradient(diffTape, cost, 1e-3, 1000);
-
-        assert(approxEqual(checksum(layer1.mWeightMatrix.refArray()), targets2[0]));
-        assert(approxEqual(checksum(layer1.mBiasVector.refArray()), targets2[0]));
-        assert(approxEqual(checksum(layer2.mWeightMatrix.refArray()), targets2[0]));
-        assert(approxEqual(checksum(layer2.mBiasVector.refArray()), targets2[0]));
-
-        std::cout << "Gradient test successful." << std::endl;
-    }
-
-    template <DataType T>
-    static void gradientTestMnist2()
-    {
-        auto mnist = Loader<T>::loadMNIST(0x4000);
-        Array<T> images(mnist.data.reshape({-1, 784}));
-        images /= 255;
-        auto onehot = mnist.label.template oneHot<T>();
-
-        using LayerSettings = LinearLayer<T>::template Settings<T>;
-        using Activation = LinearLayer<T>::Activation;
-
-        DiffTape<T> diffTape = DiffTape<T>();
-        auto &input = Variables<T>::create(diffTape, {-1, 784});
-        auto &labels = Variables<T>::create(diffTape, {-1, 10});
-
-        auto &layer1Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return x * x; }>({200, 784}) *
-                                                                    std::sqrt(6.0 / (784 + 200)));
-        auto &layer1Bias = Coefficients<T>::create(diffTape, Array<T>::constant({200}, 0));
-
-        auto layer1 = LinearLayer<T>::create(input, LayerSettings(layer1Weights, layer1Bias, Activation::LEAKYRELU, T(0.01)));
-
-        auto &layer2Weights = Coefficients<T>::create(diffTape, generatePseudorandom<T, [](T x)
-                                                                                     { return x * x; }>({10, 200}) *
-                                                                    std::sqrt(6.0 / (200 + 10)));
-        auto &layer2Bias = Coefficients<T>::create(diffTape, Array<T>::constant({10}, 0));
-
-        auto layer2 = LinearLayer<T>::create(layer1, LayerSettings(layer2Weights, layer2Bias, Activation::NONE, T(0.01)));
-
-        auto &sftm = layer2.output.softmax({-1});
-        auto &cost = MeanSquaredError<T>::create(sftm, labels);
-
-        std::vector<Unit<T> *> units = {&input, &labels, &layer1Weights, &layer1Bias, &layer1.output, &layer2Weights, &layer2Bias, &layer2.output, &sftm, &cost}; //{&layer1Weights, &layer1Bias, &layer2Weights, &layer2Bias};
-        T totalCost = 0;
-
-        for (int i = 0; i < 5; i++)
-        {
-            auto batchStart = i * 0x10;
-            auto batchEnd = (i + 1) * 0x10;
-
-            input.setValue(images.slice({batchStart}, {batchEnd}));
-            labels.setValue(onehot.slice({batchStart}, {batchEnd}));
-
-            diffTape.calculateAll(cost);
-
-            LOG(i);
-            LOG(cost.refArray().eval());
-            for (int k = 0; k < units.size(); k++)
-            {
-                std::cout << "Unit " << k << " (" << typeid(*(units[k])).name() << ")" << std::endl;
-                LOG(units[k]->refWildcardShape());
-                LOG(checksum(units[k]->refArray()));
-                LOG(checksum(units[k]->refGradient()));
-            }
-
-            layer1.applyGradient(diffTape, cost, 1e-3, 1000);
-            layer2.applyGradient(diffTape, cost, 1e-3, 1000);
-
-            totalCost += cost.refArray().eval();
-        }
-    }
-
-    template <DataType T>
-    static void performanceMeasureTest()
+    void performanceMeasureTest()
     {
         PerformanceMeasure outer;
         PerformanceMeasure inner;
@@ -435,7 +157,7 @@ public:
     }
 
     template <DataType T>
-    static void mnistRun()
+    void mnistRun()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         auto mnist = Loader<T>::loadMNIST(0x4000);
@@ -520,7 +242,7 @@ public:
     }
 
     template <DataType T>
-    static Array<T> simd_test()
+    Array<T> simd_test()
     {
         RandomArrayGenerator randomArrayGenerator(0);
 
@@ -539,9 +261,9 @@ public:
         simdMeasure.start();
         for (int i = 0; i < n; i += LENGTH)
         {
-            auto a = SimdVector<T>::load(pDataA);
-            auto b = SimdVector<T>::load(pDataB);
-            SimdVector<T>::store(pDataC, SimdVector<T>::multiply(a, b));
+            auto a = Simd::load<T>(pDataA);
+            auto b = Simd::load<T>(pDataB);
+            Simd::store<T>(pDataC, Simd::multiply(a, b));
 
             pDataA += LENGTH;
             pDataB += LENGTH;
@@ -553,7 +275,7 @@ public:
     }
 
     template <DataType T>
-    static Array<T> simd_benchmark()
+    Array<T> simd_benchmark()
     {
         RandomArrayGenerator randomArrayGenerator(0);
 
@@ -584,12 +306,12 @@ public:
     }
 
     template <DataType T>
-    static Array<T> simd_matmul()
+    Array<T> simd_matmul()
     {
         RandomArrayGenerator randomArrayGenerator(0);
 
         int n = 0x200;
-        constexpr int LENGTH = SimdVector<T>::LENGTH;
+        constexpr int LENGTH = Simd::LENGTH<T>;
 
         auto A = randomArrayGenerator.uniform<T>({n, n});
         auto B = randomArrayGenerator.uniform<T>({n, n});
@@ -605,12 +327,12 @@ public:
         {
             for (int k = 0; k < n; k++)
             {
-                auto a = SimdVector<T>::broadcast_set(*pDataA);
+                auto a = Simd::broadcast_set<T>(*pDataA);
                 for (int j = 0; j < n; j += LENGTH)
                 {
-                    auto b = SimdVector<T>::load(pDataB);
-                    auto c = SimdVector<T>::load(pDataC);
-                    SimdVector<T>::store(pDataC, SimdVector<T>::fused_add_multipy(a, b, c));
+                    auto b = Simd::load<T>(pDataB);
+                    auto c = Simd::load<T>(pDataC);
+                    Simd::store<T>(pDataC, Simd::fusedMultiplyAdd<T>(a, b, c));
 
                     pDataB += LENGTH;
                     pDataC += LENGTH;
@@ -628,7 +350,7 @@ public:
     }
 
     template <DataType T>
-    static void simd_array_matmul()
+    void simd_array_matmul()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         PerformanceMeasure simdMeasure1;
@@ -669,7 +391,7 @@ public:
     }
 
     template <DataType T>
-    static void simd_array_integrated_test()
+    void simd_array_integrated_test()
     {
         RandomArrayGenerator randomArrayGenerator(0);
         PerformanceMeasure simdMeasure1;
@@ -699,7 +421,7 @@ public:
     }
 
     template <DataType T>
-    static Array<T> benchmark_matmul()
+    Array<T> benchmark_matmul()
     {
         RandomArrayGenerator randomArrayGenerator(0);
 
@@ -741,7 +463,7 @@ public:
         return C;
     }
 
-    static void simd_masking()
+    void simd_masking()
     {
         uint64_t i = -1;
         std::bitset<64> bitset1{i};
@@ -758,37 +480,7 @@ public:
             LOG(array[j]);
     }
 
-    static void simdClipAsmTest()
-    {
-        const SimdClipBounds<float> bounds(0.3, 0.7);
-        RandomArrayGenerator rng(0);
-        auto source = rng.uniform<float>({0x1000}, 0, 1);
-        auto dest = Array<float>::constant({0x1000}, 0);
-        float *pSourceData = source.getDataPointer();
-        float *pDestData = dest.getDataPointer();
-        const float *const dataEnd = pSourceData + source.getFlatLength();
-
-        // auto lowerBound = _mm256_set1_ps(0.3);
-        // auto upperBound = _mm256_set1_ps(0.7);
-
-        for (; pSourceData < dataEnd; pDestData += 8)
-        {
-            auto a = SimdVector<float>::load(pSourceData);
-            auto b = SimdVector<float>::clip(a, bounds);
-            SimdVector<float>::store(pDestData, b);
-            // auto a = _mm256_load_ps(pSourceData);
-            // auto b = _mm256_min_ps(_mm256_max_ps(lowerBound, a), upperBound);
-            // auto(pDestData, b);
-            pSourceData += 8;
-        }
-
-        assert(approxEqual(dest.reduceMin().eval(), 0.3f));
-        assert(approxEqual(dest.reduceMax().eval(), 0.7f));
-
-        std::cout << "Simd clip test successful." << std::endl;
-    }
-
-    static void mnistDataLoad()
+    void mnistDataLoad()
     {
         auto mnist = Loader<float>::loadMNIST(0x4000);
 
@@ -812,7 +504,7 @@ public:
     }
 
     template <DataType T>
-    static void model()
+    void mnistModel()
     {
         DiffTape<T> diffTape = DiffTape<T>();
         auto &input = Variables<T>::create(diffTape, {-1, 784});
@@ -838,12 +530,12 @@ public:
 
         PerformanceMeasure overallMeasure;
         overallMeasure.start();
-        model.fit({images, onehotLabels}, 3, 16);
+        model.fit({images, onehotLabels}, 4, 16);
         overallMeasure.stop();
 
-        for (long i = 0; i < model.mUnits.size(); i++)
+        for (long i = 0; i < model.refUnits().size(); i++)
         {
-            auto* pUnit = model.mUnits[i];
+            auto *pUnit = model.refUnits()[i];
             std::cout << typeid(*(pUnit)).name() << std::endl;
             LOG(pUnit->refArray().checkNumerics());
             std::cout << pUnit->refArrayShape() << std::endl;
@@ -855,3 +547,5 @@ public:
         LOG_TIME(optMeasure.accumulated);
     }
 };
+
+#endif

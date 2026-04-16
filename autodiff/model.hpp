@@ -11,8 +11,6 @@
 #include "optimizer.hpp"
 #include "performance.hpp"
 
-class Test;
-
 namespace AutoDiff
 {
     namespace NeuralNetworks
@@ -21,8 +19,6 @@ namespace AutoDiff
             requires std::is_base_of_v<Optimizer<T>, OPT>
         class Model
         {
-
-            friend Test;
 
         protected:
             const std::vector<Variables<T> *> mVariables;
@@ -76,6 +72,11 @@ namespace AutoDiff
             }
 
         public:
+            const std::vector<Unit<T> *> refUnits() const
+            {
+                return mUnits;
+            }
+            
             void setMeasurePerformance(bool measurePerformance)
             {
                 mMeasurePerformance = measurePerformance;

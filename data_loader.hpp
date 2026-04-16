@@ -28,7 +28,6 @@ public:
 
     static LabeledData loadMNIST(std::string fileName, int count = -1)
     {
-        std::cout << std::filesystem::current_path() << std::endl;
         std::ifstream file(fileName);
         if (!file.is_open())
             throw std::invalid_argument("File could not be read.");
